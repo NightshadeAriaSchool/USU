@@ -3,6 +3,7 @@ import AriaSketch
 import torchvision
 import torch
 from torchvision import transforms
+import random
 
 class Digit:
     def __init__(self, image_tensor: torch.Tensor, label: int):
@@ -78,7 +79,10 @@ class Set:
         inputs = torch.stack([d.tensor for d in self.digits])
         labels = torch.tensor([d.label for d in self.digits], dtype=torch.long)
         return inputs, labels
-
+    
+    def shuffle(self):
+        random.shuffle(self.digits)
+    
     @staticmethod
     def from_list(digit_list):
         new_set = Set()
