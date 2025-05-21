@@ -3,13 +3,21 @@ import AriaSketch
 import torchvision
 import torch
 from torchvision import transforms
+import torch.nn.functional as F
 import random
 
 class Digit:
-    def __init__(self, image_tensor: torch.Tensor, label: int):
-        self.label = label  # The correct digit (expected output)
+    def __init__(self, image_tensor: torch.Tensor, digit: int):
+        self.digit = digit
+        self.label = F.one_hot(torch.tensor(digit).long(), num_classes=10).float()  # The correct digit (expected output)
         self.tensor = image_tensor  # Normalized tensor for NN input
-        self.graphics = self._create_graphics(image_tensor)
+        self._graphics = None
+    
+    @property
+    def graphics(self):
+        if self._graphics is None:
+            self._graphics = self._create_graphics(self.tensor)
+        return self._graphics
 
     def _create_graphics(self, image_tensor):
         graphics = AriaSketch.Graphics(28, 28)
@@ -77,7 +85,7 @@ class Set:
 
     def to_torch_format(self):
         inputs = torch.stack([d.tensor for d in self.digits])
-        labels = torch.tensor([d.label for d in self.digits], dtype=torch.long)
+        labels = torch.stack([d.label for d in self.digits])  # Shape: (batch_size, 10)
         return inputs, labels
     
     def shuffle(self):
@@ -109,3 +117,10 @@ def load(split_train_and_test: bool = False):
     else:
         train_set.join(Set.from_list([Digit(img, label) for img, label in test_dataset]))
         return train_set
+
+digit = load()[0]
+print(digit.label)
+print(digit.label.shape)
+print(digit.tensor)
+print(digit.tensor.shape)
+print("Done!")

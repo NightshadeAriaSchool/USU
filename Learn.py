@@ -3,9 +3,9 @@ import AriaSketch
 import MNIST
 import Naming
 
-Import.do_import("pygame")
-Import.do_import("torch")
-Import.do_import("torchvision")
+pygame = Import.do_import("pygame")
+torch = Import.do_import("torch")
+torchvision = Import.do_import("torchvision")
 import torch.nn as nn
 import torch.nn.functional as F
 import random
@@ -118,3 +118,10 @@ class DigitClassifier(Classifier):
     def __init__(self, previous=None):
         # Defaults to a 784-128-64-10 MLP
         super().__init__(architecture=[784, 128, 64, 10], previous=previous)
+
+# Test the Classifier on MNIST dataset
+def test_classifier():
+    # Load MNIST dataset
+    mnist = MNIST.load()
+    torch_inputs, torch_labels = mnist.to_torch_format()
+    
