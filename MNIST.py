@@ -1,7 +1,8 @@
-import pygame
+import Import
+pygame = Import.do_import("pygame")
 import AriaSketch
-import torchvision
-import torch
+torchvision = Import.do_import("torchvision")
+torch = Import.do_import("torch")
 from torchvision import transforms
 import torch.nn.functional as F
 import random
@@ -35,8 +36,8 @@ class Digit:
         return graphics
 
 class Set:
-    def __init__(self):
-        self.digits = []
+    def __init__(self, digits: list[Digit] = []):
+        self.digits = digits
 
     def add(self, digit: Digit):
         self.digits.append(digit)
@@ -80,7 +81,9 @@ class Set:
     def __iter__(self):
         return iter(self.digits)
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int|slice):
+        if isinstance(index, slice):
+            return Set(self.digits[index])
         return self.digits[index]
 
     def to_torch_format(self):
@@ -118,9 +121,14 @@ def load(split_train_and_test: bool = False):
         train_set.join(Set.from_list([Digit(img, label) for img, label in test_dataset]))
         return train_set
 
-digit = load()[0]
+set = load()
+digit = set[0]
 print(digit.label)
 print(digit.label.shape)
 print(digit.tensor)
 print(digit.tensor.shape)
 print("Done!")
+
+sl = set[0:10]
+print(sl.to_torch_format()[0].shape)
+print(sl.to_torch_format()[1].shape)
