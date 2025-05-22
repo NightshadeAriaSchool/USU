@@ -121,14 +121,3 @@ def load(split_train_and_test: bool = False):
         train_set.join(Set.from_list([Digit(img, label) for img, label in test_dataset]))
         return train_set
 
-set = load()
-digit = set[0]
-print(digit.label)
-print(digit.label.shape)
-print(digit.tensor)
-print(digit.tensor.shape)
-print("Done!")
-
-sl = set[0:10]
-print(sl.to_torch_format()[0].shape)
-print(sl.to_torch_format()[1].shape)

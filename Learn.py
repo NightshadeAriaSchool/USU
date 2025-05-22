@@ -1,12 +1,14 @@
 from __future__ import annotations
+import Import
 
-import torch
+pygame = Import.do_import("pygame")
+torch = Import.do_import("torch")
 import torch.nn as nn
 import torch.nn.functional as F
 import copy
 import Naming  # for naming NNs or reports, if needed
+import MNIST
 from MNIST import Set, Digit
-import copy
 
 class TrainingReport:
     def __init__(self, dataset: Set, loss_value: float, learning_rate=float):
@@ -33,15 +35,16 @@ class TestingReport:
 
 class Classifier:
     def __init__(self, layer_sizes=None, prev=None, report=None, model=None):
-        self.name = Naming.get_name(self)
+        self.name = Naming.new_name()
         if layer_sizes is None:
-            self.name = prev.name.increment() if prev.trained else prev.name.fork()
+            self.name = prev.name.increment() if not prev.trained else prev.name.fork()
             layer_sizes = prev.layer_sizes
             self.prev = prev
+            self.prev.trained = True
             self.report = prev.report
             self.model = prev.model
         else:
-            self.name = Naming._name()
+            self.name = Naming.new_name()
             self.layer_sizes = layer_sizes
             self.prev = prev
             self.report = report
@@ -78,7 +81,6 @@ class Classifier:
         optimizer.step()
 
         # Create the return Classifier
-        self.trained = True
         return Classifier(prev=self, report=TrainingReport(dataset, loss.item(), learning_rate), model=new_model)
     
     def test(self, dataset: Set) -> TestingReport:
@@ -86,3 +88,6 @@ class Classifier:
             outputs = self.model(dataset.to_torch_format())
         return TestingReport(dataset, outputs)
     
+set = MNIST.load()
+classifier = Classifier(layer_sizes=[784, 128, 10]).train(set)
+print(classifier.name)
