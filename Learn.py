@@ -87,7 +87,3 @@ class Classifier:
         with torch.no_grad():
             outputs = self.model(dataset.to_torch_format())
         return TestingReport(dataset, outputs)
-    
-set = MNIST.load()
-classifier = Classifier(layer_sizes=[784, 128, 10]).train(set)
-print(classifier.name)

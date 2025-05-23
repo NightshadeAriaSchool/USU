@@ -11,7 +11,7 @@ class Digit:
     def __init__(self, image_tensor: torch.Tensor, digit: int):
         self.digit = digit
         self.label = F.one_hot(torch.tensor(digit).long(), num_classes=10).float()  # The correct digit (expected output)
-        self.tensor = image_tensor  # Normalized tensor for NN input
+        self.tensor = image_tensor.flatten()  # Normalized tensor for NN input
         self._graphics = None
     
     @property
