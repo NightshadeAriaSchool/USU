@@ -1,11 +1,13 @@
 import Import
 pygame = Import.do_import("pygame")
-import AriaSketch
 torchvision = Import.do_import("torchvision")
 torch = Import.do_import("torch")
 from torchvision import transforms
 import torch.nn.functional as F
 import random
+
+_loading = False
+_set = None
 
 class Digit:
     def __init__(self, image_tensor: torch.Tensor, digit: int):
@@ -101,6 +103,15 @@ class Set:
         return new_set
 
 def load(split_train_and_test: bool = False):
+    if _set:
+        return _set
+    elif _loading:
+        while not _set:
+            pass
+        return _set
+        
+        
+    print("Loading...")
     transform = transforms.Compose([
         transforms.ToTensor()
     ])
@@ -116,8 +127,10 @@ def load(split_train_and_test: bool = False):
         test_set = Set()
         for img, label in test_dataset:
             test_set.add(Digit(img, label))
+        print("Loaded!")
         return train_set, test_set
     else:
         train_set.join(Set.from_list([Digit(img, label) for img, label in test_dataset]))
+        print("Loaded!")
         return train_set
-
+    
