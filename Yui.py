@@ -7,6 +7,13 @@
 # |   Version 0.1.2
 # |   |   Bug Fixes:
 # |   |   |   text displayed in the wrong place
+# |   Version 0.1.3
+# |   |   Yui:
+# |   |   |   Added Yui.local_subtree_bounds and Yui.global_subtree_bounds
+# |   |   Stack:
+# |   |   |   Added Stack
+# |   |   Graphics:
+# |   |   |   Added Graphics.text_width
 # TODO:
 # |   Resizable
 # |   GPU drawing (with GL)
@@ -21,12 +28,9 @@ import pygame
 from abc import ABC, abstractmethod
 import colorsys
 import threading
+from enum import Enum
 
-# TODO: Remove Surface as an argument to Graphics __new__
-
-# ---------------------
-# Utils
-# ---------------------
+# === Utils ===
 
 class Matrix2D(np.ndarray):
     """
@@ -628,9 +632,7 @@ class Color(pygame.Color):
         r, g, b = colorsys.hsv_to_rgb(h, s, b)
         return cls(int(r * 255), int(g * 255), int(b * 255), a)
 
-# ---------------------
-# Graphics
-# ---------------------
+# === Graphics === 
 
 # Global flag to determine if OpenGL should be used
 _use_gl = False  # Default to not using OpenGL
@@ -695,13 +697,10 @@ class Graphics(pygame.surface.Surface):
         self._text_align_y = 0  # Vertical text alignment (0: top, 1: bottom)
         self._text_size = 12  # Default text size
         self._text_font_path = None
-        self._text_font = None
         self.text_font = None
         self._text_leading = 0  # Default text leading (line spacing)
         
         self._curve_detail = 100  # Default curve detail for bezier curves
-        
-        print(self.get_at((0, 0)))
     
     def __array_finalize__(self, obj) -> None:
         if obj is None: return
@@ -1577,6 +1576,8 @@ class Graphics(pygame.surface.Surface):
         """
         return pygame.font.get_fonts()
     
+    def text_width(self, text: str) -> int:
+        return self._text_font.size(text)[0]
     
     # Transformations
     def push_matrix(self) -> None:
@@ -1758,6 +1759,7 @@ class Graphics(pygame.surface.Surface):
             self.blit(temp, (0, 0))
 # TODO: Implement Shape drawing logic in Graphics
 
+# === Animation ===
 class Animation:
     # Static class with nested classes like Ease, Formula, Keyframe, Envelope and Timeline.
     @staticmethod
@@ -2199,7 +2201,8 @@ class LiveValue:
         return final_value
 Animation.LiveValue = LiveValue; del LiveValue
 
-# YuiElement
+
+# === Yui ===
 class Yui:
     def __init__(self, parent:Yui):
         # --- Transform ---
@@ -2775,10 +2778,10 @@ class Yui:
             cl, ct, cr, cb = child.local_subtree_bounds
             # Convert each corner of the child's subtree bounds to our local space
             corners = [
-                child.to_parent((cl, ct)),
-                child.to_parent((cr, ct)),
-                child.to_parent((cr, cb)),
-                child.to_parent((cl, cb)),
+                child.to_parent(Vector2D(cl, ct)),
+                child.to_parent(Vector2D(cr, ct)),
+                child.to_parent(Vector2D(cr, cb)),
+                child.to_parent(Vector2D(cl, cb)),
             ]
             xs = [c.x for c in corners]
             ys = [c.y for c in corners]
@@ -3541,16 +3544,25 @@ class YuiRoot(Yui):
             pygame.display.flip()
             clock.tick(self._framerate)
 
+    def draw(self, graphics):
+        self._window_graphics.reset_matrix()
+        if self._auto_draw_bounds:
+            with graphics.push_matrix():
+                self.draw_bounds(graphics)
+        return super().draw(graphics)
+    
     def _do_debug(self, graphics):
         if self._auto_draw_bounds:
             self.draw_bounds(graphics)
     @property
-    def auto_draw_bounds(self, draw:bool) -> bool:
+    def auto_draw_bounds(self) -> bool:
         return self._auto_draw_bounds
     @auto_draw_bounds.setter
     def auto_draw_bounds(self, value:bool):
         self._auto_draw_bounds = value
 
+
+# === IO ===
 class Mouse:
     def __init__(self, root:YuiRoot):
         """
@@ -3686,7 +3698,6 @@ class Mouse:
         last = self._current if self._current and self._current.any_button_down else None
         scroll = event.y if hasattr(event, "y") else 0
         yui_event = MouseEvent(self, last.point if last else Vector2D(0, 0), scroll, mouse_event, last=last)
-        print("Yui Event:", yui_event.is_wheel_event, yui_event.event)
         
         if self._current is None:
             self._current = yui_event
@@ -3694,7 +3705,6 @@ class Mouse:
         self._current = yui_event
 
         if self._pressed is None:
-            print(yui_event.point, yui_event.scroll, hex(yui_event.event))
             pointed = self._root.yui_at_point(yui_event.point, MouseListener)
             if pointed is not None:
                 pointed.on_mouse_event(yui_event.to_local(pointed))
@@ -3969,7 +3979,6 @@ class MouseListener(ABC):
         """
         pass
 
-
 class Keyboard():
     def __init__(self, root:YuiRoot):
         self._root = root
@@ -4195,6 +4204,7 @@ class KeyboardListener(ABC):
         """
         pass
 
+# === Quick Implementations ===
 class Button(Yui, MouseListener):
     """
     A simple button UI element that responds to mouse events.
@@ -4322,96 +4332,235 @@ class Stack(Yui):
         self._stack_margin = value
     
     def on_draw(self, graphics: Graphics):
-        current_position, max_width, max_height, total_width, total_height = 0, 0, 0, 0, 0
-  
-        for child in self._children:
-            l, t, r, b = child.local_subtree_bounds
-            w = r - l
-            h = b - t
+        subtree_rectangles = []
+        local_rectangles = []
+        anchors = []
+        
+        for i, child in enumerate(self._children):
+            subtree = child.local_subtree_bounds
+            points = [
+                child.to_parent(Vector2D(subtree[0], subtree[1])),
+                child.to_parent(Vector2D(subtree[2], subtree[1])),
+                child.to_parent(Vector2D(subtree[0], subtree[3])),
+                child.to_parent(Vector2D(subtree[2], subtree[3]))
+            ]
+            subtree = (
+                min([p.x for p in points]),
+                min([p.y for p in points]),
+                max([p.x for p in points]),
+                max([p.y for p in points]),
+            )
+            subtree_rectangles.append(subtree)
             
-            if w > max_width:
-                max_width = w
+            local = child.local_bounds
+            points = [
+                child.to_parent(Vector2D(local[0], local[1])),
+                child.to_parent(Vector2D(local[2], local[1])),
+                child.to_parent(Vector2D(local[0], local[3])),
+                child.to_parent(Vector2D(local[2], local[3]))
+            ]
+            local = (
+                min([p.x for p in points]),
+                min([p.y for p in points]),
+                max([p.x for p in points]),
+                max([p.y for p in points]),
+            )
+            local_rectangles.append(local)
             
-            if h > max_height:
-                max_height = w
+            anchor = Vector2D(child.ax * child.width, child.ay * child.height)
+            anchor = child.to_parent(anchor)
+            anchors.append(anchor)
             
+        width = max([r[2] - r[0] for r in subtree_rectangles])
+        height = max([r[3] - r[1] for r in subtree_rectangles])
+        
+        coord = 0.0
+        for i, (subtree, local, anchor, child) in enumerate(zip(subtree_rectangles, local_rectangles, anchors, self._children)):
             if self._is_vertical:
-                total_height += h + self._stack_margin
-                total_width = max(total_width, w)
+                offset_x = (width - (subtree[2] - subtree[0])) * self._stack_align
+                child.x = offset_x + (anchor.x - subtree[0])
+                child.y = coord + (anchor.y - subtree[1])
+                coord += subtree[3] - subtree[1] + self._stack_margin
             else:
-                total_width += w + self._stack_margin
-                total_height = max(total_height, h)
-        
-        if self._is_vertical:
-            total_height -= self._stack_margin
-        else:
-            total_width -= self._stack_margin
-        
-        self.width, self.height = total_width, total_height
-        
-        for child in self._children:
-            l, t, r, b = child.local_subtree_bounds
-            w = r - l
-            h = b - t
-            
-            ox = (max_width - w) * self._stack_align
-            oy = (max_height - h) * self._stack_align
-            
-            old_x, old_y = child.x, child.y
-            if self._is_vertical:
-                new_x, new_y = ox, current_position
-                current_position += h + self._stack_margin
-            else:
-                new_x, new_y = current_position, oy
-                current_position += w + self._stack_margin
-            
-            # new_x += old_x - l
-            # new_y += old_y - t
-            # child.x, child.y = new_x, new_y
-            child.x, child.y = new_x - l, new_y - t
-    
-class ColoredYui(Yui):
-    def __init__(self, parent, color: Color, rs: float):
+                offset_y = (height - (subtree[3] - subtree[1])) * self._stack_align
+                child.y = offset_y + (anchor.y - subtree[1])
+                child.x = coord + (anchor.x - subtree[0])
+                coord += subtree[2] - subtree[0] + self._stack_margin
+
+class TextField(Yui, MouseListener, KeyboardListener):
+    def __init__(self, parent: Yui, is_editable: bool = True):
         super().__init__(parent)
+        self._default_text = ""
+        self._cursor = 0
+        self._input_text = ""
         
-        self.color = color
-        self.rs = rs
+        self._text_color = Color(0, 0, 0)
+        self._is_editable = is_editable
+        self._cursor = 0
+        
+        self._clickthrough = None
     
-    def on_draw(self, graphics):
-        self.r += self.rs
-        self.ax = np.sin(time.time())
-        
-        graphics.fill_color = self.color
-        graphics.no_stroke()
-        graphics.rect_mode = 'corner'
-        graphics.rectangle(0, 0, self.width, self.height)
+    @property
+    def is_editable(self) -> bool:
+        return self._is_editable
 
-class BlackRoot(YuiRoot):
-    def __init__(self, width = 800, height = 600, framerate = 60, name = 'Yui Window', is_resizable = False):
-        super().__init__(width, height, framerate, name, is_resizable)
+    @is_editable.setter
+    def is_editable(self, value: bool):
+        self._is_editable = value
+
+    @property
+    def cursor(self) -> int:
+        return self._cursor
+
+    @cursor.setter
+    def cursor(self, value: int):
+        self._cursor = max(0, min(value, len(self._input_text)))
+
+    @property
+    def default_text(self) -> str:
+        return self._default_text
+
+    @default_text.setter
+    def default_text(self, value: str):
+        self._default_text = value
+
+    @property
+    def input_text(self) -> str:
+        return self._input_text
+
+    @input_text.setter
+    def input_text(self, value: str):
+        if not self._is_editable:
+            raise ValueError("Cannot set input_text on a non-editable TextField.")
+
+        if value != self._input_text:
+            previous = self._input_text
+            self._input_text = value
+            self.cursor = len(value)
+
+            if self.is_focused:
+                self.on_text_changed(previous)
+            else:
+                self.on_text_finalized(previous, interupted=False)
     
-    def on_draw(self, graphics):
-        graphics.background(Color(0, 0, 0, 255))
-        
-        graphics.stroke_color = Color(255, 255, 255, 255)
-        graphics.stroke_width = 1
-        for i in range(int(self.width / 100) + 1):
-            graphics.line(i * 100, 0, i * 100, self.height)
-        for i in range(int(self.height / 100) + 1):
-            graphics.line(0, i * 100, self.width, i * 100)
-            
-        print(graphics.last_transform)
-        
-root = BlackRoot(640, 480)
-# root.auto_draw_bounds = True
+    @property
+    def text_color(self) -> Color:
+        return self._text_color
 
-stack = Stack(root)
-stack.x, stack.y = 0.3, 0.3
+    @text_color.setter
+    def text_color(self, value: Color):
+        self._text_color = value
 
-red = ColoredYui(stack, Color(255, 0, 0, 255), 0.01)
-red.width, red.height = 100, 100
+    @property
+    def is_focused(self) -> bool:
+        return not self.is_destroyed and self.root.keyboard.listener == self
 
-blue = ColoredYui(stack, Color(0, 0, 255, 255), 0.0001)
-blue.width, blue.height = 50, 50
+    def on_draw(self, graphics: Graphics):
+        text_to_draw = self._input_text if self._input_text else self._default_text
 
-root.init()
+        graphics.fill_color = self._text_color
+        graphics.text_size = self.height
+        graphics.text_align_x = 0
+        graphics.text_align_y = 0
+
+        graphics.text(text_to_draw, 0, 0)
+
+        if self.is_focused and self.is_editable:
+            caret_offset = graphics.text_width(self._input_text[:self._cursor])
+            graphics.line(caret_offset, 0, caret_offset, self.height)
+    
+    def on_mouse_event(self, event: MouseEvent):
+        if not event.is_pressed_event:
+            return
+
+        point = event.point
+
+        if 0 <= point.x <= self.width and 0 <= point.y <= self.height:
+            # Clicked inside the TextField
+            self.root.keyboard.start_keyboard(self, event.mouse)
+        else:
+            # Clicked outside
+            if self.is_focused:
+                self.root.keyboard.end_keyboard()
+
+    def on_keyboard_started(self, mouse: Mouse):
+        if not self._is_editable:
+            self.root.keyboard.end_keyboard()
+        else:
+            self._last_input_text = self._input_text
+            # TODO: _ClickThrough
+
+    def on_keyboard_ended(self, mouse: Mouse):
+        self.on_text_finalized(self._last_input_text, interupted=False)
+        self._clickthrough.destroy()
+
+    def on_keyboard_interupted(self, mouse: Mouse, cause: KeyboardListener):
+        self.on_text_finalized(self._last_input_text, interupted=True)
+
+    def on_keyboard_event(self, event: KeyboardEvent):
+        if not self.is_editable or not self.is_focused:
+            return
+
+        key = event.key_code
+        ctrl = pygame.K_LCTRL in event.mouse.keys or pygame.K_RCTRL in event.mouse.keys
+
+        # Cursor movement
+        if key == pygame.K_LEFT:
+            self.cursor -= 1
+        elif key == pygame.K_RIGHT:
+            self.cursor += 1
+        elif key in (pygame.K_HOME, pygame.K_UP):
+            self.cursor = 0
+        elif key in (pygame.K_END, pygame.K_DOWN):
+            self.cursor = len(self._input_text)
+
+        # Confirm or cancel input
+        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_ESCAPE):
+            self.root.keyboard.end_keyboard()
+
+        # Delete backward
+        elif key == pygame.K_BACKSPACE and self.cursor > 0:
+            if ctrl:
+                start = self._find_previous_word_start(self._input_text, self.cursor)
+                self.input_text = self._input_text[:start] + self._input_text[self.cursor:]
+                self.cursor = start
+            else:
+                self.input_text = self._input_text[:self.cursor - 1] + self._input_text[self.cursor:]
+                self.cursor -= 1
+
+        # Delete forward
+        elif key == pygame.K_DELETE and self.cursor < len(self._input_text):
+            if ctrl:
+                end = self._find_next_word_end(self._input_text, self.cursor)
+                self.input_text = self._input_text[:self.cursor] + self._input_text[end:]
+            else:
+                self.input_text = self._input_text[:self.cursor] + self._input_text[self.cursor + 1:]
+
+        # Add character input
+        elif len(event.key) == 1 and event.key.isprintable():
+            self.input_text = self._input_text[:self.cursor] + event.key + self._input_text[self.cursor:]
+            self.cursor += 1
+
+    def _find_previous_word_start(self, text: str, index: int) -> int:
+        index -= 1
+        while index > 0 and text[index].isspace():
+            index -= 1
+        while index > 0 and not text[index - 1].isspace():
+            index -= 1
+        return max(index, 0)
+
+    def _find_next_word_end(self, text: str, index: int) -> int:
+        length = len(text)
+        while index < length and text[index].isspace():
+            index += 1
+        while index < length and not text[index].isspace():
+            index += 1
+        return index
+
+    # Callbacks to override or extend
+    def on_text_changed(self, previous: str):
+        pass
+
+    def on_text_finalized(self, previous: str, interupted: bool):
+        pass
+
