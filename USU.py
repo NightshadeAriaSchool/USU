@@ -1,6 +1,6 @@
 import pygame
 import threading
-from Yui import Yui, YuiRoot, MouseListener, Graphics, Color
+from Yui import Yui, YuiRoot, MouseListener, Graphics, Color, MouseEvent
 import MNIST
 from MNIST import Digit, Set
 from Naming import AgentName
@@ -9,11 +9,17 @@ from Learn import Classifier, TestingReport, TrainingReport
 class Global:
     agents: list[Classifier] = []
     digit_set: Set = None
+    canvas: dict = None
     
     @staticmethod
     def init():
         Global.agents = Classifier([16, 16])
         Global.digit_set = MNIST.load()
+        Global.canvas = {
+            "canvas": Graphics(28, 28),
+            "prediction": None
+        }
+        
 
 class WindowRoot(YuiRoot):
     def __init__(self, width = 800, height = 600, framerate = 60, name = 'Yui Window', is_resizable = False):
@@ -24,7 +30,7 @@ class WindowRoot(YuiRoot):
     
     def on_child_destroyed(self, child, index):
         if isinstance(child, LoadingScreen):
-            pass # TODO
+            MainYui(self)
 
 class LoadingScreen(Yui):
     def __init__(self, parent):
@@ -47,6 +53,19 @@ class LoadingScreen(Yui):
                 self.destroy()
         else:
             graphics.text("Loading...", self.width / 2, self.height / 2)
+
+class MainYui(Yui):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.width, self.height = self.root.width, self.root.height
+        
+class DigitCanvas(Yui, MouseListener):
+    def __init__(self, parent):
+        super().__init__(parent)
+    
+    def on_mouse_event(self, event: MouseEvent):
+        if (event.is_move_event and event.is_left_down) or event.is_left_event:
+            pass
 
 root = WindowRoot(640, 480)
 loading_screen = LoadingScreen(root)

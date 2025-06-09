@@ -1,14 +1,17 @@
 # Version 0.1
 # Changelog
-# |    Version 0.1
-# |    |    Initial creation
-# |    Version 0.1.1
-# |    |    Added Button and Switch
+# |   Version 0.1
+# |   |   Initial creation
+# |   Version 0.1.1
+# |   |   Added Button and Switch
+# |   Version 0.1.2
+# |   |   Bug Fixes:
+# |   |   |   text displayed in the wrong place
 # TODO:
-# |    Resizable
-# |    GPU drawing (with GL)
-# |    Basic UI elements
-# |    UI elements: Stack, TextField, Slider, InfiniteCanvas
+# |   Resizable
+# |   GPU drawing (with GL)
+# |   Basic UI elements
+# |   UI elements: Stack, TextField, Slider, InfiniteCanvas
 
 from __future__ import annotations
 import time
@@ -2421,7 +2424,7 @@ class Yui:
         last_ax = self.ax
         if not isinstance(value, (int, float)):
             raise TypeError("ax must be a number.")
-        self._ax = value
+        self._ax = max(0, min(1, value))
         self._needs_local_matrix_update = True
         self.on_transform_changed(self.x, self.y, self.r, self.sx, self.sy, last_ax, self.ay)
     @property
@@ -2444,7 +2447,7 @@ class Yui:
         last_ay = self.ay
         if not isinstance(value, (int, float)):
             raise TypeError("ay must be a number.")
-        self._ay = value
+        self._ay = max(0, min(1, value))
         self._needs_local_matrix_update = True
         self.on_transform_changed(self.x, self.y, self.r, self.sx, self.sy, self.ax, last_ay)
     @property
@@ -2571,10 +2574,6 @@ class Yui:
 
         if self._needs_local_matrix_update:
             self._local_matrix = Matrix2D.identity()
-            # self._local_matrix = self._local_matrix.translate(self._x, self._y)
-            # self._local_matrix = self._local_matrix.rotate(self._r)
-            # self._local_matrix = self._local_matrix.translate(-self._ax * self._width * self._sx, -self._ay * self._height * self._sy)
-            # self._local_matrix = self._local_matrix.scale(self._sx, self._sy)
             self._local_matrix = self._local_matrix.translate(self._x, self._y)
             self._local_matrix = self._local_matrix.rotate(self._r)
             self._local_matrix = self._local_matrix.translate(-self._ax * self._width * self._sx, -self._ay * self._height * self._sy)
@@ -2684,6 +2683,31 @@ class Yui:
             return (tp.x, tp.y)
         else:
             raise TypeError("point must be a Vector2D or a tuple of two numbers.")
+    def to_parent(self, point:Vector2D|tuple) -> Vector2D|tuple:
+        """
+        Converts a point from this element's local coordinates to its parent's local coordinates.
+
+        Args:
+            point (Vector2D|tuple): The point in this element's local coordinates.
+
+        Returns:
+            Vector2D|tuple: The point in the parent's local coordinates.
+        """
+        if self._parent is None:
+            # No parent, so local == parent space
+            if isinstance(point, Vector2D):
+                return point
+            elif isinstance(point, tuple) and len(point) == 2:
+                return point
+            else:
+                raise TypeError("point must be a Vector2D or a tuple of two numbers.")
+        if isinstance(point, Vector2D):
+            return self._local_matrix @ point
+        elif isinstance(point, tuple) and len(point) == 2:
+            tp = self._local_matrix @ Vector2D(*point)
+            return (tp.x, tp.y)
+        else:
+            raise TypeError("point must be a Vector2D or a tuple of two numbers.")
     def is_in_local_bounds(self, point:Vector2D|tuple) -> bool:
         """
         Checks if a point is within the local bounds of this Yui element.
@@ -2733,7 +2757,58 @@ class Yui:
         r = max([v.x for v in ar])
         b = max([v.y for v in ar])
         return (l, t, r, b)
+    @property
+    def local_subtree_bounds(self) -> tuple[float, float, float, float]:
+        """
+        Gets the axis-aligned bounding box of this element and all descendants in local coordinates.
 
+        Returns:
+            tuple: (min_x, min_y, max_x, max_y) in local coordinates.
+        """
+        # Start with this element's local bounding box
+        l, t, r, b = self.local_bounds
+        min_x, min_y = l, t
+        max_x, max_y = r, b
+
+        # Expand to include all children's subtree bounds (converted to our local space)
+        for child in self._children:
+            cl, ct, cr, cb = child.local_subtree_bounds
+            # Convert each corner of the child's subtree bounds to our local space
+            corners = [
+                child.to_parent((cl, ct)),
+                child.to_parent((cr, ct)),
+                child.to_parent((cr, cb)),
+                child.to_parent((cl, cb)),
+            ]
+            xs = [c.x for c in corners]
+            ys = [c.y for c in corners]
+            min_x = min(min_x, *xs)
+            min_y = min(min_y, *ys)
+            max_x = max(max_x, *xs)
+            max_y = max(max_y, *ys)
+        
+        return (min_x, min_y, max_x, max_y)
+    @property
+    def world_subtree_bounds(self) -> tuple[float, float, float, float]:
+        """
+        Gets the axis-aligned bounding box of this element and all descendants in world coordinates.
+
+        Returns:
+            tuple: (min_x, min_y, max_x, max_y) in world coordinates.
+        """
+        # Get local subtree bounds
+        min_x, min_y, max_x, max_y = self.local_subtree_bounds
+        # Convert all four corners to world coordinates
+        corners = [
+            self.to_world((min_x, min_y)),
+            self.to_world((max_x, min_y)),
+            self.to_world((max_x, max_y)),
+            self.to_world((min_x, max_y)),
+        ]
+        xs = [c.x for c in corners]
+        ys = [c.y for c in corners]
+        return (min(xs), min(ys), max(xs), max(ys))
+    
     # --- Hierarchy ---
     @property
     def parent(self) -> 'Yui':
@@ -3128,7 +3203,7 @@ class Yui:
         name = self.__class__.__name__
         bounds = self.world_bounds
         # Hue based on depth
-        color = Color.from_hsb(self.depth / 10.0) # Normalize depth to a hue value
+        color = Color(255, 255, 255, 255) # Normalize depth to a hue value
 
         graphics.fill_color = Color(0, 0, 0, 0) # Transparent fill for bounds
         graphics.stroke_color = color # Stroke color based on depth
@@ -3215,6 +3290,20 @@ class Yui:
         Args:
             child (Yui): The child element to check.
             index (int): The index of the child to remove.
+        
+        Returns:
+            bool: True if the child can be removed, False otherwise.
+        """
+        return True
+    def can_child_be_moved(self, child:Yui, index_from:int, index_to:int) -> bool:
+        """
+        Checks if a child Yui element can be removed from this Yui element at the specified index.
+        This can be overridden by subclasses to implement custom logic.
+        
+        Args:
+            child (Yui): The child element to check.
+            index (int): The index of the child to move from.
+            index (int): The index of the child to move to.
         
         Returns:
             bool: True if the child can be removed, False otherwise.
@@ -4206,3 +4295,123 @@ class Switch(Yui, MouseListener):
     
     def on_toggle(self, value:bool):
         pass
+
+class Stack(Yui):
+    def __init__(self, parent: Yui, is_vertical: bool = True):
+        super().__init__(parent)
+        
+        self._is_vertical = is_vertical
+        self._stack_align = 0.0
+        self._stack_margin = 0.0
+    
+    @property
+    def is_vertical(self) -> bool:
+        return self._is_vertical
+    
+    @property
+    def stack_align(self) -> float:
+        return self._stack_align
+    @stack_align.setter
+    def stack_align(self, value:float):
+        self._stack_align = max(0, min(1, value))
+    @property
+    def stack_margin(self) -> float:
+        return self._stack_margin
+    @stack_margin.setter
+    def stack_margin(self, value:float):
+        self._stack_margin = value
+    
+    def on_draw(self, graphics: Graphics):
+        current_position, max_width, max_height, total_width, total_height = 0, 0, 0, 0, 0
+  
+        for child in self._children:
+            l, t, r, b = child.local_subtree_bounds
+            w = r - l
+            h = b - t
+            
+            if w > max_width:
+                max_width = w
+            
+            if h > max_height:
+                max_height = w
+            
+            if self._is_vertical:
+                total_height += h + self._stack_margin
+                total_width = max(total_width, w)
+            else:
+                total_width += w + self._stack_margin
+                total_height = max(total_height, h)
+        
+        if self._is_vertical:
+            total_height -= self._stack_margin
+        else:
+            total_width -= self._stack_margin
+        
+        self.width, self.height = total_width, total_height
+        
+        for child in self._children:
+            l, t, r, b = child.local_subtree_bounds
+            w = r - l
+            h = b - t
+            
+            ox = (max_width - w) * self._stack_align
+            oy = (max_height - h) * self._stack_align
+            
+            old_x, old_y = child.x, child.y
+            if self._is_vertical:
+                new_x, new_y = ox, current_position
+                current_position += h + self._stack_margin
+            else:
+                new_x, new_y = current_position, oy
+                current_position += w + self._stack_margin
+            
+            # new_x += old_x - l
+            # new_y += old_y - t
+            # child.x, child.y = new_x, new_y
+            child.x, child.y = new_x - l, new_y - t
+    
+class ColoredYui(Yui):
+    def __init__(self, parent, color: Color, rs: float):
+        super().__init__(parent)
+        
+        self.color = color
+        self.rs = rs
+    
+    def on_draw(self, graphics):
+        self.r += self.rs
+        self.ax = np.sin(time.time())
+        
+        graphics.fill_color = self.color
+        graphics.no_stroke()
+        graphics.rect_mode = 'corner'
+        graphics.rectangle(0, 0, self.width, self.height)
+
+class BlackRoot(YuiRoot):
+    def __init__(self, width = 800, height = 600, framerate = 60, name = 'Yui Window', is_resizable = False):
+        super().__init__(width, height, framerate, name, is_resizable)
+    
+    def on_draw(self, graphics):
+        graphics.background(Color(0, 0, 0, 255))
+        
+        graphics.stroke_color = Color(255, 255, 255, 255)
+        graphics.stroke_width = 1
+        for i in range(int(self.width / 100) + 1):
+            graphics.line(i * 100, 0, i * 100, self.height)
+        for i in range(int(self.height / 100) + 1):
+            graphics.line(0, i * 100, self.width, i * 100)
+            
+        print(graphics.last_transform)
+        
+root = BlackRoot(640, 480)
+# root.auto_draw_bounds = True
+
+stack = Stack(root)
+stack.x, stack.y = 0.3, 0.3
+
+red = ColoredYui(stack, Color(255, 0, 0, 255), 0.01)
+red.width, red.height = 100, 100
+
+blue = ColoredYui(stack, Color(0, 0, 255, 255), 0.0001)
+blue.width, blue.height = 50, 50
+
+root.init()
