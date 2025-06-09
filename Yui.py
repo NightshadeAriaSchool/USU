@@ -14,6 +14,12 @@
 # |   |   |   Added Stack
 # |   |   Graphics:
 # |   |   |   Added Graphics.text_width
+# |   |   TextField:
+# |   |   |   Added TextField
+# |   |   Mouse & MouseEvent:
+# |   |   |   Added Mouse.pass_event, MosueEvent.to_world and MouseEvent.pass_to
+# |   |   Switch:
+# |   |   |   Added radio feature
 # TODO:
 # |   Resizable
 # |   GPU drawing (with GL)
@@ -2937,7 +2943,7 @@ class Yui:
                 self._parent.on_child_added(self, index)
             elif self._parent == parent:
                 old_index = self._parent._children.index(self)
-                new_index = max(0, min(self._parent.child_count - 1, index))
+                new_index = max(0, min(self._parent.child_count - 1, index if index is not None else self._parent.child_count - 1))
                 if not self._parent.can_child_be_moved(self, old_index, new_index): # No change if not allowed to move
                     return
                 self._parent._children.remove(self)
@@ -3421,6 +3427,7 @@ class YuiRoot(Yui):
         
         self._auto_draw_bounds = False
         self._is_resizable = is_resizable
+        self._auto_background = None
 
     @property
     def mouse(self):
@@ -3504,7 +3511,6 @@ class YuiRoot(Yui):
                     self._mouse.mouse_moved(event)
                 elif event.type == pygame.MOUSEWHEEL:
                     self._mouse.mouse_wheel(event)
-                # TODO: Keyboard events
                 elif event.type == pygame.KEYDOWN:
                     self._keyboard.key_pressed(event)
                 elif event.type == pygame.KEYUP:
@@ -3549,6 +3555,8 @@ class YuiRoot(Yui):
         if self._auto_draw_bounds:
             with graphics.push_matrix():
                 self.draw_bounds(graphics)
+        if isinstance(self._auto_background, Color):
+            graphics.background(self._auto_background)
         return super().draw(graphics)
     
     def _do_debug(self, graphics):
@@ -3560,7 +3568,13 @@ class YuiRoot(Yui):
     @auto_draw_bounds.setter
     def auto_draw_bounds(self, value:bool):
         self._auto_draw_bounds = value
-
+    @property
+    def auto_background(self) -> Color:
+        return self._auto_background
+    @auto_background.setter
+    def auto_background(self, value: Color):
+        if isinstance(value, Color) or value is None:
+            self._auto_background = value
 
 # === IO ===
 class Mouse:
@@ -3594,6 +3608,9 @@ class Mouse:
     @property
     def pressed(self):
         return self._pressed
+    @property
+    def root(self):
+        return self._root
     
     def mouse_pressed(self, event:pygame.event.Event):
         """
@@ -3710,7 +3727,16 @@ class Mouse:
                 pointed.on_mouse_event(yui_event.to_local(pointed))
         else:
             self._pressed.on_mouse_event(yui_event.to_local(self._pressed))
-  
+    
+    def pass_event(self, event: MouseEvent, yui: MouseListener = None):
+        if not self._pressed:
+            return
+        yui = self._root.yui_at_point(self._pressed.to_world(event.point), extends=MouseListener, exclude=[self])
+        if not yui:
+            return
+        yui.on_mouse_event(event.to_world(yui).pass_to(yui))
+        self._pressed = yui
+        
 class MouseEvent:
     LEFT = 0x1
     RIGHT = 0x2
@@ -3744,13 +3770,28 @@ class MouseEvent:
                 self.down = last.down | ~(event & MouseEvent.BUTTON_MASK)
         self.timestamp = time.time() if timestamp is None else timestamp
         self.last = last
+        self._passed = None
     
-    def to_local(self, yui:Yui):
+    def to_local(self, yui:MouseListener):
         transformed = yui.to_local(self.point)
         local = MouseEvent(self.mouse, transformed, self.scroll, self.event, self.timestamp)
         local.down = self.down
         local.last = self.last
         return local
+    def to_world(self, yui:MouseListener):
+        transformed = yui.to_world(self.point)
+        local = MouseEvent(self.mouse, transformed, self.scroll, self.event, self.timestamp)
+        local.down = self.down
+        local.last = self.last
+        return local
+    def pass_to(self, yui: MouseListener):
+        passed = MouseEvent(self.mouse, self.point, self.scroll, self.event, self.timestamp)
+        passed.down = self.down
+        passed.last = self.last
+        passed._passed = yui
+        return passed
+    
+    @staticmethod
     def mouse_button(button:int) -> int:
         """
         Gets the mouse button event type based on the button number.
@@ -3770,6 +3811,13 @@ class MouseEvent:
         else:
             return MouseEvent.ALT
 
+    @property
+    def is_passed(self) -> bool:
+        return self._passed is not None
+    @property
+    def passed_from(self) -> MouseListener|None:
+        return self._passed
+    
     # --- Event Type Properties ---
     @property
     def is_pressed_event(self) -> bool:
@@ -4016,7 +4064,7 @@ class Keyboard():
         if not isinstance(event, pygame.event.Event):
             raise TypeError("event must be a pygame.event.Event.")
         
-        key_event = KeyboardEvent(event)
+        key_event = KeyboardEvent(self, event)
         if any([key_event.is_key(k) for k in self._keys]):
             return
         self._keys.append(key_event)
@@ -4032,7 +4080,7 @@ class Keyboard():
         if not isinstance(event, pygame.event.Event):
             raise TypeError("event must be a pygame.event.Event.")
         
-        key_event = KeyboardEvent(event)
+        key_event = KeyboardEvent(self, event)
         corresponding_key = None
         for i in range(len(self._keys)):
             if self._keys[i].is_key(key_event):
@@ -4041,7 +4089,7 @@ class Keyboard():
         if corresponding_key is None:
             return
         self._keys.remove(corresponding_key)
-        key_event = KeyboardEvent(event, last=corresponding_key)
+        key_event = KeyboardEvent(self, event, last=corresponding_key)
         if self._current is not None:
             self._current.on_key_event(key_event)
     
@@ -4083,7 +4131,7 @@ class Keyboard():
         self._current = None
 
 class KeyboardEvent():
-    def __init__(self, event:pygame.event.Event, last:KeyboardEvent=None):
+    def __init__(self, keyboard:Keyboard, event:pygame.event.Event, last:KeyboardEvent=None):
         """
         Initializes a keyboard event.
         
@@ -4094,11 +4142,15 @@ class KeyboardEvent():
             TypeError: If the event is not a pygame event.
         """
 
+        self._keyboard = keyboard
         self._key = event.unicode
         self._key_code = event.key
         self._time = time.time()
         self._last:KeyboardEvent = last
     
+    @property
+    def keyboard(self):
+        return self._keyboard
     @property
     def key(self) -> str:
         """
@@ -4262,9 +4314,38 @@ class Switch(Yui, MouseListener):
     """
     A simple rectangular switch UI element (toggle button).
     """
-    def __init__(self, parent:Yui, checked:bool=False):
+    
+    class Radio:
+        def __init__(self):
+            self.switches = []
+        
+        def __len__(self):
+            return len(self.switches)
+
+        def __getitem__(self, idx):
+            return self.switches[idx]
+
+        def __iter__(self):
+            return iter(self.switches)
+            
+        def add(self, switch: Switch):
+            if switch not in self.switches:
+                self.switches.append(switch)
+
+        def remove(self, switch: Switch):
+            if switch in self.switches:
+                self.switches.remove(switch)
+        
+        def on_switched(self, switched: Switch):
+            for s in self.switches:
+                if s is not switched and s.checked:
+                    s.checked = False
+                    s.on_toggle(False)
+    
+    def __init__(self, parent:Yui, checked:bool=False, radio: 'Switch.Radio'|None = None):
         super().__init__(parent)
         self.checked = checked
+        self.radio = radio
     
     @property
     def is_hovered(self):
@@ -4302,6 +4383,8 @@ class Switch(Yui, MouseListener):
         if event.is_released_event and event.is_left_event:
             self.checked = not self.checked
             self.on_toggle(self.checked)
+            if self.radio:
+                self.radio.on_switched(self)
     
     def on_toggle(self, value:bool):
         pass
@@ -4436,7 +4519,7 @@ class TextField(Yui, MouseListener, KeyboardListener):
         if value != self._input_text:
             previous = self._input_text
             self._input_text = value
-            self.cursor = len(value)
+            self.cursor = self.cursor
 
             if self.is_focused:
                 self.on_text_changed(previous)
@@ -4473,22 +4556,35 @@ class TextField(Yui, MouseListener, KeyboardListener):
         if not event.is_pressed_event:
             return
 
-        point = event.point
-
-        if 0 <= point.x <= self.width and 0 <= point.y <= self.height:
-            # Clicked inside the TextField
-            self.root.keyboard.start_keyboard(self, event.mouse)
-        else:
-            # Clicked outside
-            if self.is_focused:
-                self.root.keyboard.end_keyboard()
+        self.root.keyboard.start_keyboard(self)
 
     def on_keyboard_started(self, mouse: Mouse):
         if not self._is_editable:
             self.root.keyboard.end_keyboard()
         else:
             self._last_input_text = self._input_text
-            # TODO: _ClickThrough
+            self._clickthrough = self._new_clickthrough()
+    
+    def _new_clickthrough(self):
+        class _ClickThrough(Yui, MouseListener):
+            def __init__(self, text_field: TextField):
+                super().__init__(text_field.root)
+                
+                self.text_field = text_field
+            
+            def on_draw(self, graphics):
+                self.set_parent(self.root)
+                self.x, self.y, self.width, self.height = 0, 0, self.root.width, self.root.height
+            
+            def on_mouse_event(self, event):
+                if event.is_pressed_event:
+                    text_field_event = event.to_world(self).to_local(self.text_field)
+                    if self.text_field.is_in_local_bounds(text_field_event):
+                        event.mouse.pass_event(self.text_field)
+                    else:
+                        event.mouse.root.keyboard.end_keyboard()
+                        event.mouse.pass_event()
+        return _ClickThrough(self)
 
     def on_keyboard_ended(self, mouse: Mouse):
         self.on_text_finalized(self._last_input_text, interupted=False)
@@ -4496,13 +4592,17 @@ class TextField(Yui, MouseListener, KeyboardListener):
 
     def on_keyboard_interupted(self, mouse: Mouse, cause: KeyboardListener):
         self.on_text_finalized(self._last_input_text, interupted=True)
+        self._clickthrough.destroy()
 
-    def on_keyboard_event(self, event: KeyboardEvent):
+    def on_key_event(self, event: KeyboardEvent):
         if not self.is_editable or not self.is_focused:
             return
+        
+        if not event.is_pressed:
+            return 
 
         key = event.key_code
-        ctrl = pygame.K_LCTRL in event.mouse.keys or pygame.K_RCTRL in event.mouse.keys
+        ctrl = pygame.K_LCTRL in event.keyboard.keys or pygame.K_RCTRL in event.keyboard.keys
 
         # Cursor movement
         if key == pygame.K_LEFT:
@@ -4525,8 +4625,10 @@ class TextField(Yui, MouseListener, KeyboardListener):
                 self.input_text = self._input_text[:start] + self._input_text[self.cursor:]
                 self.cursor = start
             else:
+                adjust = self.cursor != len(self._input_text)
                 self.input_text = self._input_text[:self.cursor - 1] + self._input_text[self.cursor:]
-                self.cursor -= 1
+                if adjust:
+                    self.cursor -= 1
 
         # Delete forward
         elif key == pygame.K_DELETE and self.cursor < len(self._input_text):
