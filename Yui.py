@@ -566,6 +566,10 @@ class Color(pygame.Color):
         Returns:
             Color: A new Color instance.
         """
+        r = int(max(0, min(255, r)))
+        g = int(max(0, min(255, g)))
+        b = int(max(0, min(255, b)))
+        a = int(max(0, min(255, a)))
         return super().__new__(cls, r, g, b, a)
     
     def __repr__(self):
@@ -635,7 +639,7 @@ class Color(pygame.Color):
         Returns:
             Color: A new Color instance created from the HSB values.
         """
-        r, g, b = colorsys.hsv_to_rgb(h, s, b)
+        r, g, b = colorsys.hsv_to_rgb(h / 255, s / 255, b / 255)
         return cls(int(r * 255), int(g * 255), int(b * 255), a)
 
 # === Graphics === 
@@ -1437,10 +1441,12 @@ class Graphics(pygame.surface.Surface):
         ]
         
         # Fill the rectangle with the current fill color
-        self._shape_fill(transformed_points, self._fill_color)
+        if self.fill_color.a != 0:
+            self._shape_fill(transformed_points, self._fill_color)
         
         # Draw the outline of the rectangle
-        self._shape_outline(transformed_points, self._stroke_color, self._stroke_width)
+        if self.stroke_color.a != 0 and self.stroke_width > 0:
+            self._shape_outline(transformed_points, self._stroke_color, self._stroke_width)
     
     def ellipse(self, x1:float, y1:float, x2:float, y2:float) -> None:
         """
@@ -1472,7 +1478,7 @@ class Graphics(pygame.surface.Surface):
         # Draw the outline of the ellipse
         self._shape_outline(ellipse_points, self._stroke_color, self._stroke_width)
     
-    def image(self, image:pygame.Surface, x:float, y:float) -> None:
+    def image(self, image:pygame.Surface, x:float, y:float, w: float = None, h: float = None) -> None:
         """
         Draws an image on the surface at the specified position.
         
@@ -1485,8 +1491,11 @@ class Graphics(pygame.surface.Surface):
         if not isinstance(image, pygame.Surface):
             raise TypeError("image must be a pygame.Surface instance.")
         
+        if not w or not h:
+            w, h = image.get_size()
+        
         # Convert coordinates based on the current image mode
-        coords = self._coordinates(self._image_mode, x, y, image.get_width(), image.get_height())
+        coords = self._coordinates(self._image_mode, x, y, w, h)
         
         # Transform points using the last transformation matrix
         transformed_points = [
@@ -1553,8 +1562,8 @@ class Graphics(pygame.surface.Surface):
             text_surface = self._text_font.render(line, True, self._fill_color.to_tuple())
             
             # Calculate position based on alignment
-            left = self._text_align_x * (self.width - text_surface.get_width())
-            top = self._text_align_y * (self.height - text_surface.get_height())
+            left = x - self._text_align_x * text_surface.get_width()
+            top = y - self._text_align_y * text_surface.get_height()
             position = (left, top)
             
             transformed_points = [self.last_transform @ vector for vector in [
@@ -2732,7 +2741,7 @@ class Yui:
         elif isinstance(point, tuple) and len(point) == 2:
             x, y = point
         else:
-            raise TypeError("point must be a Vector2D or a tuple of two numbers.")
+            raise TypeError(f"point must be a Vector2D or a tuple of two numbers, not {type(point)}.")
         
         bounds = self.local_bounds
         return (bounds[0] <= x <= bounds[0] + bounds[2]) and (bounds[1] <= y <= bounds[1] + bounds[3])
@@ -3169,9 +3178,10 @@ class Yui:
 
             for child in self._children:
                 child.draw(self._graphics)
-
+            
             with graphics.push_matrix():
                 graphics.apply_matrix(self.local_matrix)
+                graphics.image_mode = 'corners'
                 graphics.image(self._graphics, 0, 0)
             
             self._draw_time_subtree = time.time() - debug_time_start
@@ -3195,10 +3205,18 @@ class Yui:
         Prints the hierarchy of this Yui element and its children.
         This is useful for debugging the structure of the Yui elements.
         """
+        print(self.get_tree_string())
+    def get_tree_string(self):
+        """
+        Prints the hierarchy of this Yui element and its children.
+        This is useful for debugging the structure of the Yui elements.
+        """
         indent = ' ' * (self.depth * 2)
-        print(f"{indent}{self.__class__.__name__} (x={self.x}, y={self.y}, r={self.r}, sx={self.sx}, sy={self.sy})")
+        s = ""
+        s += f"{indent}{self.__class__.__name__} (x={self.x}, y={self.y}, r={self.r}, sx={self.sx}, sy={self.sy})"
         for child in self.children:
-            child.print_tree()
+            s += "\n" + child.get_tree_string()
+        return s
     def draw_bounds(self, graphics:Graphics):
         """
         Draws the bounds of this Yui element for debugging purposes.
@@ -3214,8 +3232,9 @@ class Yui:
         # Hue based on depth
         color = Color(255, 255, 255, 255) # Normalize depth to a hue value
 
-        graphics.fill_color = Color(0, 0, 0, 0) # Transparent fill for bounds
+        graphics.no_fill()
         graphics.stroke_color = color # Stroke color based on depth
+        graphics.stroke_width = 1
         graphics.rect_mode = 'corners' # Center mode for bounds
         graphics.rectangle(bounds[0], bounds[1], bounds[2], bounds[3])
 
@@ -3224,6 +3243,8 @@ class Yui:
         graphics.text_align = 0, 0 # Align top left
         graphics.text(name, bounds[0] + 2, bounds[1] + 2) # Draw name at top left of bounds
         
+        for child in self._children:
+            child.draw_bounds(graphics)
 
     # --- Flags ---
     @property
@@ -3551,13 +3572,13 @@ class YuiRoot(Yui):
             clock.tick(self._framerate)
 
     def draw(self, graphics):
+        if isinstance(self._auto_background, Color):
+            graphics.background(self._auto_background)
+        super().draw(graphics)
         self._window_graphics.reset_matrix()
         if self._auto_draw_bounds:
             with graphics.push_matrix():
                 self.draw_bounds(graphics)
-        if isinstance(self._auto_background, Color):
-            graphics.background(self._auto_background)
-        return super().draw(graphics)
     
     def _do_debug(self, graphics):
         if self._auto_draw_bounds:
@@ -3634,7 +3655,7 @@ class Mouse:
         if self._start is None:
             self._start = yui_event
         
-        button = yui_event.event & MouseEvent.TYPE_MASK
+        button = yui_event.event & MouseEvent.BUTTON_MASK
         if button == MouseEvent.LEFT:
             self._last_pressed_left = yui_event
         elif button == MouseEvent.RIGHT:
@@ -3661,6 +3682,9 @@ class Mouse:
         """
         if not isinstance(event, pygame.event.Event):
             raise TypeError("event must be a pygame.event.Event.")
+        
+        if self._pressed is None:
+            return
         
         mouse_event = MouseEvent.RELEASED
         mouse_button = MouseEvent.mouse_button(event.button)
@@ -3762,12 +3786,12 @@ class MouseEvent:
         self.point = Vector2D(*point) if isinstance(point, tuple) else point
         self.scroll = scroll
         self.event = event if event else 0
-        self.down = event & MouseEvent.BUTTON_MASK
+        self.down = last.down if last else event & MouseEvent.BUTTON_MASK
         if last:
             if (self.event & MouseEvent.TYPE_MASK) == MouseEvent.PRESSED:
                 self.down = last.down | (event & MouseEvent.BUTTON_MASK)
             if (self.event & MouseEvent.TYPE_MASK) == MouseEvent.RELEASED:
-                self.down = last.down | ~(event & MouseEvent.BUTTON_MASK)
+                self.down = last.down & ~(event & MouseEvent.BUTTON_MASK)
         self.timestamp = time.time() if timestamp is None else timestamp
         self.last = last
         self._passed = None
@@ -4112,7 +4136,7 @@ class Keyboard():
             self._current.on_keyboard_interupted(self, listener)
         self._current = listener
         self._current.on_keyboard_started(self)
-    def end_keyboard(self, listener:KeyboardListener):
+    def end_keyboard(self):
         """
         Stops listening for keyboard events with the specified listener.
         
@@ -4122,11 +4146,6 @@ class Keyboard():
         Raises:
             TypeError: If the listener is not an instance of KeyboardListener.
         """
-        if not isinstance(listener, KeyboardListener):
-            raise TypeError("listener must be an instance of KeyboardListener.")
-        
-        if self._current != listener:
-            return
         self._current.on_keyboard_ended(self)
         self._current = None
 
@@ -4268,7 +4287,7 @@ class Button(Yui, MouseListener):
     
     @property
     def is_hovered(self):
-        return self.root.mouse.current and self.is_in_local_bounds(self.root.mouse.current.to_local().point)
+        return self.root.mouse.current and self.is_in_local_bounds(self.root.mouse.current.to_local(self).point)
     @property
     def is_pressed(self):
         return self.root.mouse.pressed == self
@@ -4305,7 +4324,7 @@ class Button(Yui, MouseListener):
 
     def on_mouse_event(self, event:MouseEvent):
         if event.is_released_event and event.is_left_event:
-            self.on_click(self)
+            self.on_click()
     
     def on_click(self):
         pass
@@ -4454,8 +4473,8 @@ class Stack(Yui):
             anchor = child.to_parent(anchor)
             anchors.append(anchor)
             
-        width = max([r[2] - r[0] for r in subtree_rectangles])
-        height = max([r[3] - r[1] for r in subtree_rectangles])
+        width = max([r[2] - r[0] for r in subtree_rectangles]) if subtree_rectangles else 1
+        height = max([r[3] - r[1] for r in subtree_rectangles]) if subtree_rectangles else 1
         
         coord = 0.0
         for i, (subtree, local, anchor, child) in enumerate(zip(subtree_rectangles, local_rectangles, anchors, self._children)):
@@ -4477,7 +4496,8 @@ class TextField(Yui, MouseListener, KeyboardListener):
         self._cursor = 0
         self._input_text = ""
         
-        self._text_color = Color(0, 0, 0)
+        self._background_color = Color(23, 23, 23, 63)
+        self._text_color = Color(0, 0, 0, 0)
         self._is_editable = is_editable
         self._cursor = 0
         
@@ -4535,18 +4555,31 @@ class TextField(Yui, MouseListener, KeyboardListener):
         self._text_color = value
 
     @property
+    def background_color(self) -> Color:
+        return self.background_color
+
+    @background_color.setter
+    def background_color(self, value: Color):
+        self.background_color = value
+
+    @property
     def is_focused(self) -> bool:
         return not self.is_destroyed and self.root.keyboard.listener == self
 
     def on_draw(self, graphics: Graphics):
+        graphics.fill_color = self._background_color
+        graphics.rect_mode = 'corners'
+        graphics.no_stroke()
+        graphics.rectangle(0, 0, self.width, self.height)
+        
         text_to_draw = self._input_text if self._input_text else self._default_text
 
         graphics.fill_color = self._text_color
-        graphics.text_size = self.height
+        graphics.text_size = int(max(self.height, 1))
         graphics.text_align_x = 0
-        graphics.text_align_y = 0
+        graphics.text_align_y = 0.5
 
-        graphics.text(text_to_draw, 0, 0)
+        graphics.text(text_to_draw, 0, self.height * 0.5)
 
         if self.is_focused and self.is_editable:
             caret_offset = graphics.text_width(self._input_text[:self._cursor])
@@ -4579,15 +4612,15 @@ class TextField(Yui, MouseListener, KeyboardListener):
             def on_mouse_event(self, event):
                 if event.is_pressed_event:
                     text_field_event = event.to_world(self).to_local(self.text_field)
-                    if self.text_field.is_in_local_bounds(text_field_event):
-                        event.mouse.pass_event(self.text_field)
+                    if self.text_field.is_in_local_bounds(text_field_event.point):
+                        event.mouse.pass_event(event, yui=self.text_field)
                     else:
                         event.mouse.root.keyboard.end_keyboard()
-                        event.mouse.pass_event()
+                        event.mouse.pass_event(event)
         return _ClickThrough(self)
 
     def on_keyboard_ended(self, mouse: Mouse):
-        self.on_text_finalized(self._last_input_text, interupted=False)
+        self.on_text_finalized(self._last_input_text, False)
         self._clickthrough.destroy()
 
     def on_keyboard_interupted(self, mouse: Mouse, cause: KeyboardListener):

@@ -2,7 +2,7 @@ from __future__ import annotations
 import Import
 
 pygame = Import.do_import("pygame")
-torch = Import.do_import("torch")
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import copy
@@ -38,7 +38,7 @@ class Classifier:
         self.name = Naming.new_name()
         if layer_sizes is None:
             self.name = prev.name.increment() if not prev.trained else prev.name.fork()
-            layer_sizes = prev.layer_sizes
+            self.layer_sizes = prev.layer_sizes
             self.prev = prev
             self.prev.trained = True
             self.report = prev.report
@@ -48,9 +48,25 @@ class Classifier:
             self.layer_sizes = layer_sizes
             self.prev = prev
             self.report = report
-            self.model = self._build_network(layer_sizes)
+            self.model = self._build_network([784, *layer_sizes, 10])
         self.trained = False
-
+    
+    @property
+    def forked_by(self):
+        current = self
+        id = self.name.id
+        while current and current.name.id == id:
+            current = current.prev
+        return current
+    
+    def get_epoch(self, epoch: int):
+        if epoch > self.name.epoch:
+            return self
+        current = self
+        while current and current.name.epoch != epoch:
+            current = current.prev
+        return current
+    
     def _build_network(self, layer_sizes):
         layers = []
         for i in range(len(layer_sizes) - 1):
@@ -59,11 +75,13 @@ class Classifier:
                 layers.append(nn.ReLU())
         return nn.Sequential(*layers)
 
-    def predict(self, data: Set|Digit) -> torch.Stack:
+    def predict(self, data: Set|Digit) -> torch.Tensor:
         if isinstance(data, Digit):
             data = Set([data])
         
         torch_data = data.to_torch_format()
+        if isinstance(torch_data, tuple):
+            torch_data = torch_data[0]  # Only use the input tensor
         with torch.no_grad():
             outputs = self.model(torch_data)
         

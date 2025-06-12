@@ -1,18 +1,25 @@
+from __future__ import annotations
 import Import
 pygame = Import.do_import("pygame")
 torchvision = Import.do_import("torchvision")
 torch = Import.do_import("torch")
+import torch
 from torchvision import transforms
 import torch.nn.functional as F
 import random
+from Yui import Graphics
+import numpy as np
 
 _loading = False
 _set = None
 
 class Digit:
-    def __init__(self, image_tensor: torch.Tensor, digit: int):
+    def __init__(self, image_tensor: torch.Tensor, digit: int = None):
         self.digit = digit
-        self.label = F.one_hot(torch.tensor(digit).long(), num_classes=10).float()  # The correct digit (expected output)
+        if digit is not None:
+            self.label = F.one_hot(torch.tensor(digit).long(), num_classes=10).float()
+        else:
+            self.label = torch.zeros(10)
         self.tensor = image_tensor.flatten()  # Normalized tensor for NN input
         self._graphics = None
     
@@ -21,21 +28,19 @@ class Digit:
         if self._graphics is None:
             self._graphics = self._create_graphics(self.tensor)
         return self._graphics
+    
+    @staticmethod
+    def from_graphics(graphics) -> 'Digit':
+        # Resize to 28x28 if needed
+        if graphics.get_width() != 28 or graphics.get_height() != 28:
+            graphics = pygame.transform.smoothscale(graphics, (28, 28))
+        arr = pygame.surfarray.array2d(graphics).astype(np.float32)
+        arr = arr / 255.0
+        tensor = torch.from_numpy(arr).view(1, -1)  # Shape (1, 784)
+        return Digit(tensor)
 
     def _create_graphics(self, image_tensor):
-        graphics = AriaSketch.Graphics(28, 28)
-        graphics.load_pixels()
-
-        # Convert normalized grayscale tensor to ARGB hex (white to black)
-        for y in range(28):
-            for x in range(28):
-                pixel_val = image_tensor[0][y][x].item()  # Tensor is [1, 28, 28]
-                gray = int((1.0 - pixel_val) * 255)  # Reverse norm if 1 is black
-                argb = (0xFF << 24) | (gray << 16) | (gray << 8) | gray
-                graphics.pixels[y][x] = argb
-
-        graphics.update_pixels()
-        return graphics
+        raise NotImplementedError()
 
 class Set:
     def __init__(self, digits: list[Digit] = []):
@@ -89,12 +94,25 @@ class Set:
         return self.digits[index]
 
     def to_torch_format(self):
-        inputs = torch.stack([d.tensor for d in self.digits])
-        labels = torch.stack([d.label for d in self.digits])  # Shape: (batch_size, 10)
+        inputs = torch.stack([torch.as_tensor(d.tensor) for d in self.digits])
+        labels = torch.stack([torch.as_tensor(d.label) for d in self.digits])  # Shape: (batch_size, 10)
         return inputs, labels
     
     def shuffle(self):
         random.shuffle(self.digits)
+    
+    def random(self, perc: float, seed: int = None, return_test: bool = False) -> Set|tuple[Set, Set]:
+        rng = random.Random(seed) if seed else random.Random()
+        digits_copy = self.digits[:]
+        rng.shuffle(digits_copy)
+        split_idx = int(len(digits_copy) * perc)
+        selected = digits_copy[:split_idx]
+        remainder = digits_copy[split_idx:]
+        if return_test:
+            return Set.from_list(selected), Set.from_list(remainder)
+        else:
+            return Set.from_list(selected)
+        
     
     @staticmethod
     def from_list(digit_list):
@@ -102,7 +120,7 @@ class Set:
         new_set.digits = digit_list
         return new_set
 
-def load(split_train_and_test: bool = False):
+def load(split_train_and_test: bool = False, perc: float = 1):
     if _set:
         return _set
     elif _loading:
@@ -116,13 +134,22 @@ def load(split_train_and_test: bool = False):
         transforms.ToTensor()
     ])
 
+    print("Loading data...")
     train_dataset = torchvision.datasets.MNIST(root="./data", train=True, download=True, transform=transform)
     test_dataset = torchvision.datasets.MNIST(root="./data", train=False, download=True, transform=transform)
 
+    print("Converting data...")
     train_set = Set()
+    i = 0
     for img, label in train_dataset:
         train_set.add(Digit(img, label))
-
+        if i / len(train_dataset) >= perc:
+            return Set()
+        if i % 1000 == 0 and i > 0:
+            print(f"    Converted: {i} / {len(train_dataset) * perc}")
+        i += 1
+    
+    print("Finalizing...")
     if split_train_and_test:
         test_set = Set()
         for img, label in test_dataset:
