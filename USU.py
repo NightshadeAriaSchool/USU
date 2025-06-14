@@ -125,7 +125,7 @@ class LoadingScreen(Yui):
 
 
 class ActualProgram(Stack):      
-    def __init__(self, parent: Yui):    
+    def __init__(self, parent: Yui):
         super().__init__(parent=parent, is_vertical=False)
         self.width, self.height = self.root.width, self.root.height
         self.stack_margin = self.width / 80
@@ -390,8 +390,6 @@ class ActualProgram(Stack):
             
             def on_value_changed(self, old: int):
                 Global.selected_train_epochs = self.value  
-
-        
         
         left = Stack(self, is_vertical=True)
         left.stack_align = 0.5
