@@ -41,8 +41,8 @@ class Classifier:
             self.layer_sizes = prev.layer_sizes
             self.prev = prev
             self.prev.trained = True
-            self.report = prev.report
-            self.model = prev.model
+            self.report = report
+            self.model = model
         else:
             self.name = Naming.new_name()
             self.layer_sizes = layer_sizes
@@ -50,6 +50,31 @@ class Classifier:
             self.report = report
             self.model = self._build_network([784, *layer_sizes, 10])
         self.trained = False
+        
+    def __str__(self):
+        lines = [f"🧠 Classifier: {self.name}"]
+        if self.report:
+            lines.append(f"📉 Loss: {getattr(self.report, 'loss', 'N/A'):.6f}")
+            lines.append(f"🎓 Learning rate: {getattr(self.report, 'learning_rate', 'N/A')}")
+        else:
+            lines.append("📉 Loss: <no report>")
+        lines.append("🔍 Model parameters:")
+        for i, param in enumerate(self.model.parameters()):
+            data = param.data
+            lines.append(
+                f"  Layer {i:02d}: shape={tuple(data.shape)} | min={data.min().item():.4f} | "
+                f"max={data.max().item():.4f} | mean={data.mean().item():.4f}"
+            )
+        if self.prev and self.prev == self:
+            lines.append(f"Model parameters equal the previous one's.")
+        else:
+            lines.append(f"Model parameters differ from the last one's.")
+        return "\n".join(lines)
+    def __eq__(self, value):
+        for p1, p2 in zip(self.model.parameters(), value.model.parameters()):
+            if not torch.equal(p1, p2):
+                return False
+            return True
     
     @property
     def forked_by(self):
@@ -74,6 +99,15 @@ class Classifier:
             if i < len(layer_sizes) - 2:
                 layers.append(nn.ReLU())
         return nn.Sequential(*layers)
+    def _build_network2(self, layer_sizes):
+        return nn.Sequential(
+            nn.Linear(784, 16),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(16, 16),
+            nn.ReLU(),
+            nn.Linear(16, 10)
+        )
 
     def predict(self, data: Set|Digit) -> torch.Tensor:
         if isinstance(data, Digit):
@@ -85,7 +119,7 @@ class Classifier:
         with torch.no_grad():
             outputs = self.model(torch_data)
         
-        return outputs
+        return torch.softmax(outputs, dim=1)
     
     def train(self, dataset: Set, learning_rate: float = 0.01) -> Classifier:
         new_model = copy.deepcopy(self.model)

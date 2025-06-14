@@ -12,6 +12,8 @@ import numpy as np
 
 _loading = False
 _set = None
+progress = 0
+total = 1
 
 class Digit:
     def __init__(self, image_tensor: torch.Tensor, digit: int = None):
@@ -37,7 +39,9 @@ class Digit:
         arr = pygame.surfarray.array2d(graphics).astype(np.float32)
         arr = arr / 255.0
         tensor = torch.from_numpy(arr).view(1, -1)  # Shape (1, 784)
-        return Digit(tensor)
+        digit = Digit(tensor)
+        digit._graphics = graphics
+        return digit
 
     def _create_graphics(self, image_tensor):
         raise NotImplementedError()
@@ -98,29 +102,32 @@ class Set:
         labels = torch.stack([torch.as_tensor(d.label) for d in self.digits])  # Shape: (batch_size, 10)
         return inputs, labels
     
-    def shuffle(self):
-        random.shuffle(self.digits)
-    
-    def random(self, perc: float, seed: int = None, return_test: bool = False) -> Set|tuple[Set, Set]:
-        rng = random.Random(seed) if seed else random.Random()
-        digits_copy = self.digits[:]
+    def shuffle(self, seed: int = None) -> Set:
+        digits_copy = self.digits.copy()
+        rng = random.Random(seed)
         rng.shuffle(digits_copy)
-        split_idx = int(len(digits_copy) * perc)
-        selected = digits_copy[:split_idx]
-        remainder = digits_copy[split_idx:]
-        if return_test:
-            return Set.from_list(selected), Set.from_list(remainder)
-        else:
-            return Set.from_list(selected)
-        
+        return Set(digits_copy)
+    
+    def random(self, size: float = None, seed: int = None, return_test: bool = False) -> Set|tuple[Set, Set]:
+        return self.shuffle()[:max(0, min(len(self), size if size else len(self)))]
+    
+    def get_labeled(self, digit: 1) -> Set:
+        return Set([d for d in self if d.digit == digit])
     
     @staticmethod
     def from_list(digit_list):
         new_set = Set()
         new_set.digits = digit_list
         return new_set
-
-def load(split_train_and_test: bool = False, perc: float = 1):
+    
+    def summary(self) -> str:
+        counts = [0] * 10  # for digits 0-9
+        for digit in self.digits:
+            if 0 <= digit.digit <= 9:
+                counts[digit.digit] += 1
+        return ', '.join(f"{i}: {count}" for i, count in enumerate(counts))
+    
+def load(split_train_and_test: bool = False, max_size: int = 70000):
     if _set:
         return _set
     elif _loading:
@@ -137,27 +144,34 @@ def load(split_train_and_test: bool = False, perc: float = 1):
     print("Loading data...")
     train_dataset = torchvision.datasets.MNIST(root="./data", train=True, download=True, transform=transform)
     test_dataset = torchvision.datasets.MNIST(root="./data", train=False, download=True, transform=transform)
+    global total
+    total = min(max_size, len(train_dataset) + len(test_dataset))
 
     print("Converting data...")
     train_set = Set()
-    i = 0
+    global progress
     for img, label in train_dataset:
+        if progress == max_size:
+            break
         train_set.add(Digit(img, label))
-        if i / len(train_dataset) >= perc:
-            return Set()
-        if i % 1000 == 0 and i > 0:
-            print(f"    Converted: {i} / {len(train_dataset) * perc}")
-        i += 1
+        progress += 1
     
     print("Finalizing...")
     if split_train_and_test:
         test_set = Set()
         for img, label in test_dataset:
+            if progress == max_size:
+                break
             test_set.add(Digit(img, label))
+            progress += 1
         print("Loaded!")
         return train_set, test_set
     else:
-        train_set.join(Set.from_list([Digit(img, label) for img, label in test_dataset]))
+        for img, label in test_dataset:
+            if progress == max_size:
+                break
+            train_set.add(Digit(img, label))
+            progress += 1
         print("Loaded!")
         return train_set
     

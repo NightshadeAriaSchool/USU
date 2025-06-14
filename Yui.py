@@ -20,6 +20,12 @@
 # |   |   |   Added Mouse.pass_event, MosueEvent.to_world and MouseEvent.pass_to
 # |   |   Switch:
 # |   |   |   Added radio feature
+# |   Version 0.1.4
+# |   |   Fixed TextField
+# |   |   Fixed Graphics.ellipse()
+# |   |   Fixed Yui.draw()
+# |   |   Added Slider
+# |   |   
 # TODO:
 # |   Resizable
 # |   GPU drawing (with GL)
@@ -1242,7 +1248,9 @@ class Graphics(pygame.surface.Surface):
         Args:
             color (Color): The color to fill the surface with.
         """
-        self.fill(color.to_tuple())
+        overlay = pygame.Surface(self.get_size(), pygame.SRCALPHA)
+        overlay.fill(color.to_tuple())
+        self.blit(overlay, (0, 0))
     
     
     def path(self, points:Iterable[Vector2D]) -> None:
@@ -1461,16 +1469,12 @@ class Graphics(pygame.surface.Surface):
         
         # Convert coordinates based on the current ellipse mode
         left, top, width, height = self._coordinates(self._ellipse_mode, x1, y1, x2, y2)
+        cx, cy = left + width * 0.5, top + height * 0.5
         
-        center = self.last_transform @ Vector2D(left + width / 2, top + height / 2)
-        vert_vector = self.last_transform @ Vector2D(0, height / 2)
-        horiz_vector = self.last_transform @ Vector2D(width / 2, 0)
-        
-        # Calculate the points of the ellipse
-        ellipse_points = []
-        for angle in np.linspace(0, 2 * np.pi, self._curve_detail):
-            point = center + vert_vector * np.sin(angle) + horiz_vector * np.cos(angle)
-            ellipse_points.append(point)
+        ellipse_points = [self.last_transform @ Vector2D(
+            cx + width * 0.5 * np.sin(2 * np.pi * i / self.curve_detail),
+            cy + height * 0.5 * np.cos(2 * np.pi * i / self.curve_detail)
+        ) for i in range(self.curve_detail)]
             
         # Fill the ellipse with the current fill color
         self._shape_fill(ellipse_points, self._fill_color)
@@ -1478,7 +1482,7 @@ class Graphics(pygame.surface.Surface):
         # Draw the outline of the ellipse
         self._shape_outline(ellipse_points, self._stroke_color, self._stroke_width)
     
-    def image(self, image:pygame.Surface, x:float, y:float, w: float = None, h: float = None) -> None:
+    def image(self, image:pygame.Surface, x:float, y:float, w: float = None, h: float = None, smooth: bool = True) -> None:
         """
         Draws an image on the surface at the specified position.
         
@@ -1511,7 +1515,7 @@ class Graphics(pygame.surface.Surface):
             Vector2D(1, 0),
             Vector2D(1, 1),
             Vector2D(0, 1)
-        ])
+        ], smooth=smooth)
     
     def arc (self, x:float, y:float, radius:float, start_angle:float, end_angle:float) -> None:
         """
@@ -1718,7 +1722,14 @@ class Graphics(pygame.surface.Surface):
         if color is None:
             color = self._stroke_color
         
-        pygame.draw.lines(self, color.to_tuple(), True, [p.to_tuple() for p in points], width)
+        if color.a == 255:
+            # Fully opaque, draw directly
+            pygame.draw.lines(self, color.to_tuple(), True, [p.to_tuple() for p in points], width)
+        else:
+            # Transparent outline, draw on temp surface
+            temp_surf = pygame.Surface(self.get_size(), pygame.SRCALPHA)
+            pygame.draw.lines(temp_surf, color.to_tuple(), True, [p.to_tuple() for p in points], width)
+            self.blit(temp_surf, (0, 0))
     
     def _shape_fill(self, points:Iterable[Vector2D], color:Color=None) -> None:
         """
@@ -1734,7 +1745,7 @@ class Graphics(pygame.surface.Surface):
         pygame.draw.polygon(self, color.to_tuple(), [p.to_tuple() for p in points])
     
     # FIXME: Nonsense
-    def _shape_texture(self, points:Iterable[Vector2D], texture:pygame.Surface, uvs:Iterable[Vector2D]=None) -> None:
+    def _shape_texture(self, points:Iterable[Vector2D], texture:pygame.Surface, uvs:Iterable[Vector2D]=None, smooth:bool=True) -> None:
         # Draw a textured polygon using the given points and UVs.
         if uvs is None or len(points) != len(uvs):
             raise ValueError("UVs must be provided and match the number of points.")
@@ -1759,7 +1770,10 @@ class Graphics(pygame.surface.Surface):
             dst_rect = pygame.Rect(min_x, min_y, max_x - min_x, max_y - min_y)
             src_rect = pygame.Rect(0, 0, src_w, src_h)
             # Scale texture to fit destination rect
-            tex_scaled = pygame.transform.smoothscale(texture, (dst_rect.width, dst_rect.height))
+            if smooth:
+                tex_scaled = pygame.transform.smoothscale(texture, (dst_rect.width, dst_rect.height))
+            else:
+                tex_scaled = pygame.transform.scale(texture, (dst_rect.width, dst_rect.height))
             # Blit the scaled texture onto a temp surface
             temp = pygame.Surface(self.get_size(), pygame.SRCALPHA)
             temp.blit(tex_scaled, dst_rect.topleft)
@@ -3179,22 +3193,24 @@ class Yui:
             for child in self._children:
                 child.draw(self._graphics)
             
-            with graphics.push_matrix():
-                graphics.apply_matrix(self.local_matrix)
-                graphics.image_mode = 'corners'
-                graphics.image(self._graphics, 0, 0)
+            graphics.push_matrix()
+            graphics.apply_matrix(self.local_matrix)
+            graphics.image_mode = 'corners'
+            graphics.image(self._graphics, 0, 0)
+            graphics.pop_matrix()
             
             self._draw_time_subtree = time.time() - debug_time_start
         else:
             debug_time_start = time.time()
-            with graphics.push_matrix():
-                graphics.apply_matrix(self.local_matrix)
-                self.on_draw(graphics)
-            
-                self._draw_time_self = time.time() - debug_time_start
+            graphics.push_matrix()
+            graphics.apply_matrix(self.local_matrix)
+            self.on_draw(graphics)
+        
+            self._draw_time_self = time.time() - debug_time_start
 
-                for child in self._children:
-                    child.draw(graphics)
+            for child in self._children:
+                child.draw(graphics)
+            graphics.pop_matrix()
                 
             self._draw_time_subtree = time.time() - debug_time_start
 
@@ -3257,6 +3273,8 @@ class Yui:
         """
         return self._destroyed
     def destroy(self):
+        if self.is_destroyed:
+            return
         for child in self.children:
             child.destroy()
         self.on_destroyed()
@@ -4494,9 +4512,10 @@ class TextField(Yui, MouseListener, KeyboardListener):
         super().__init__(parent)
         self._default_text = ""
         self._cursor = 0
+        self._last_input_text = ""
         self._input_text = ""
         
-        self._background_color = Color(23, 23, 23, 63)
+        self._background_color = Color(23, 23, 23, 255)
         self._text_color = Color(0, 0, 0, 0)
         self._is_editable = is_editable
         self._cursor = 0
@@ -4567,12 +4586,13 @@ class TextField(Yui, MouseListener, KeyboardListener):
         return not self.is_destroyed and self.root.keyboard.listener == self
 
     def on_draw(self, graphics: Graphics):
-        graphics.fill_color = self._background_color
-        graphics.rect_mode = 'corners'
-        graphics.no_stroke()
-        graphics.rectangle(0, 0, self.width, self.height)
+        if self._is_editable:
+            graphics.fill_color = self._background_color
+            graphics.rect_mode = 'corners'
+            graphics.no_stroke()
+            graphics.rectangle(0, 0, self.width, self.height)
         
-        text_to_draw = self._input_text if self._input_text else self._default_text
+        text_to_draw = self._input_text if self._input_text and len(self._input_text) > 0 else self._default_text
 
         graphics.fill_color = self._text_color
         graphics.text_size = int(max(self.height, 1))
@@ -4582,6 +4602,8 @@ class TextField(Yui, MouseListener, KeyboardListener):
         graphics.text(text_to_draw, 0, self.height * 0.5)
 
         if self.is_focused and self.is_editable:
+            graphics.stroke_color = Color(self._text_color.r, self._text_color.g, self._text_color.b, int(np.sin(time.time() * np.pi * 2) * 127 + 128))
+            graphics.stroke_width = 1
             caret_offset = graphics.text_width(self._input_text[:self._cursor])
             graphics.line(caret_offset, 0, caret_offset, self.height)
     
@@ -4699,3 +4721,86 @@ class TextField(Yui, MouseListener, KeyboardListener):
     def on_text_finalized(self, previous: str, interupted: bool):
         pass
 
+class Slider(Yui, MouseListener):
+    def __init__(self, parent: Yui, normalized_value: float = 0.5, range: tuple[float, float] = (0, 1), steps: int = 0):
+        super().__init__(parent)
+        self._normalized_value = max(0, min(1, normalized_value))
+        self._range = list(range)          
+        self._steps = 0 if steps < 2 else steps
+    @property
+    def dragging(self) -> bool:
+        return self.root.mouse.pressed == self
+    @property
+    def normalized_value(self) -> float:
+        return self._normalized_value
+    @normalized_value.setter
+    def normalized_value(self, value: float):    
+        if self._steps >= 2:                
+            value = round(value * (self._steps - 1)) / (self._steps - 1)            
+        clamped = max(0, min(1, value))    
+        if clamped == self._normalized_value:
+            return        
+        old = self._normalized_value
+        self._normalized_value = clamped    
+        self.on_value_changed(old)                
+    @property                
+    def steps(self) -> int:                
+        return self._steps                
+    @steps.setter                
+    def steps(self, value: int):                
+        self._steps = 0 if value < 2 else value  
+    @property  
+    def normalized_step_size(self) -> float:  
+        return 1 / (self._steps - 1) if self._steps != 0 else 0
+    @property  
+    def step_size(self) -> float:  
+        return self.normalized_step_size * (self.maximum - self.minimum)  
+    @property
+    def minimum(self) -> float:
+        return self._range[0]
+    @minimum.setter
+    def minimum(self, value: float):
+        self._range[0] = value
+    @property
+    def maximum(self) -> float:
+        return self._range[1]
+    @maximum.setter
+    def maximum(self, value: float):
+        self._range[1] = value
+    @property
+    def value(self) -> float:
+        return self.minimum + self._normalized_value * (self.maximum - self.minimum)
+    @value.setter
+    def value(self, value: float):
+        self.normalized_value = (value - self.minimum) / (self.maximum - self.minimum)
+    def on_draw(self, graphics: Graphics):
+        left = self.height / 2            
+        right = self.width - left
+        knob_size = self.height
+        knob_x = left + self.normalized_value * (right - left)
+        
+        graphics.stroke_width = 1
+        
+        # Draw track
+        graphics.fill_color = Color(200, 200, 200)
+        graphics.stroke_color = Color(100, 100, 100)
+        graphics.rect_mode = 'corner'
+        graphics.rectangle(left, self.height / 2 - self.height / 4, right, self.height / 2)   
+        
+        # Draw markers
+        for i in range(self._steps - 2): # Will not draw when steps is 0, excludes first and last
+            graphics.stroke_color = Color(0, 0, 0, 255)
+            x = left + (i + 1) * (right - left) / (self._steps - 1)
+            graphics.line(x, self.height * 0.375, x, self.height * 0.625)
+
+        # Draw knob
+        graphics.fill_color = Color(80, 120, 220, 255) if self.dragging else Color(120, 160, 240, 255)
+        graphics.stroke_color = Color(100, 100, 100, 255)
+        graphics.rect_mode = 'center'
+        graphics.rectangle(knob_x, self.height / 2, knob_size, knob_size)
+
+    def on_mouse_event(self, event: MouseEvent):
+        if event.any_button_down:
+            self.normalized_value = (event.point.x - self.height / 2) / (self.width - self.height)
+    def on_value_changed(self, old: float):
+        pass
