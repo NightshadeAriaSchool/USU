@@ -36,8 +36,13 @@ class Digit:
         # Resize to 28x28 if needed
         if graphics.get_width() != 28 or graphics.get_height() != 28:
             graphics = pygame.transform.smoothscale(graphics, (28, 28))
-        arr = pygame.surfarray.array2d(graphics).astype(np.float32)
-        arr = arr / 255.0
+        # Convert Yui.Graphics to a numpy array of grayscale pixel values
+        arr = np.zeros((28, 28), dtype=np.float32)
+        for y in range(28):
+            for x in range(28):
+                g = graphics.get_at((x, y)).g
+                arr[y, x] = g / 255.0
+        print(arr)
         tensor = torch.from_numpy(arr).view(1, -1)  # Shape (1, 784)
         digit = Digit(tensor)
         digit._graphics = graphics

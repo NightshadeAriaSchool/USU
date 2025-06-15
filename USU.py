@@ -33,7 +33,7 @@ class Global:
           
     @staticmethod      
     def init():      
-        Global.dataset = MNIST.load(split_train_and_test=False, max_size=5000)
+        Global.dataset = MNIST.load(split_train_and_test=False)
         Global.agents.append(Classifier(layer_sizes=[128, 64]))
         Global.selected_agent = Global.agents[0]
         Global.selected_train_epochs = 1
@@ -52,7 +52,7 @@ class Global:
             Global.batch_seed = random.Random(Global.batch_seed).randint(0, 2**32)
             new_agent = Global.selected_agent.train(data, learning_rate = Global.learning_rate)
             if forking:
-                Global.agents.append(new_agent)                      
+                Global.agents.append(new_agent)
             else:                        
                 idx = Global.agents.index(Global.selected_agent)
                 Global.agents[idx] = new_agent
@@ -190,6 +190,17 @@ class ActualProgram(Stack):
                 graphics.image_mode = 'corner'
                 graphics.image(Global.user_digit.graphics, 0, 0, self.height, self.height, smooth=False)
                 
+                max_index = 0
+                for i, val in enumerate(values):
+                    if val > values[max_index]:
+                        max_index = i
+                graphics.no_stroke()
+                graphics.fill_color = Color(127, 127, 127, 63)
+                graphics.rect_mode = 'corners'
+                w = (self.width - self.height) / 10
+                graphics.rectangle(self.height + max_index * w, 0, self.height + (max_index + 1) * w, self.height)
+                
+                
                 for i, val in enumerate(values):
                     w = (self.width - self.height) / 10
                     x = self.height + i * w
@@ -212,8 +223,10 @@ class ActualProgram(Stack):
                     g = 0
                     b = int(max(0, min(255, 127 + 127 * val)))
                     graphics.fill_color = Color(63, 255, 63, 255) if val == max_val else Color(r, g, b, 255)
+                    graphics.stroke_color = Color(255, 255, 255, 255)
                     graphics.rect_mode = 'corner'
                     graphics.rectangle(bar_x, bar_y, 8, bar_h)
+                    
         
         class InfoYui(Yui):
             def __init__(self, parent):
@@ -450,7 +463,7 @@ class ActualProgram(Stack):
         batch_name.text_color = Color(255, 255, 255, 255)
         batch_name.default_text = "Batch size"
         
-        batch_slider = Slider(batch_size_stack)  
+        batch_slider = Slider(batch_size_stack)
         batch_slider.width, batch_slider.height = self.width / 4 - self.height / 50 - self.stack_margin / 2, self.height / 24
         batch_slider.minimum, batch_slider.maximum = 0, len(Global.dataset)
         batch_slider.steps = 15

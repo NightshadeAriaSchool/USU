@@ -731,7 +731,6 @@ class Graphics(pygame.surface.Surface):
         """
         return f"Graphics({self.get_width()}, {self.get_height()})"
     
-    
     # Properties
     @property
     def width(self) -> int:
@@ -1181,7 +1180,6 @@ class Graphics(pygame.surface.Surface):
         if not isinstance(detail, int) or detail < 1:
             raise ValueError("curve_detail must be an integer greater than or equal to 1.")
         self._curve_detail = detail
-    
     
     # Pixel Access
     def set_pixel(self, x:int, y:int, color:Color) -> None:

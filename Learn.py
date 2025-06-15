@@ -98,6 +98,9 @@ class Classifier:
             layers.append(nn.Linear(layer_sizes[i], layer_sizes[i+1]))
             if i < len(layer_sizes) - 2:
                 layers.append(nn.ReLU())
+            if i == 0:
+                layers.append(nn.Dropout(0.2))
+                
         return nn.Sequential(*layers)
     def _build_network2(self, layer_sizes):
         return nn.Sequential(
