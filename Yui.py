@@ -25,12 +25,15 @@
 # |   |   Fixed Graphics.ellipse()
 # |   |   Fixed Yui.draw()
 # |   |   Added Slider
-# |   |   
+# |   Version 0.1.5
+# |   |   Added TabView
+# |   |   Implemented enabling
 # TODO:
 # |   Resizable
 # |   GPU drawing (with GL)
 # |   Basic UI elements
 # |   UI elements: Stack, TextField, Slider, InfiniteCanvas
+# |   Fix align
 
 from __future__ import annotations
 import time
@@ -713,7 +716,7 @@ class Graphics(pygame.surface.Surface):
         self._text_align_y = 0  # Vertical text alignment (0: top, 1: bottom)
         self._text_size = 12  # Default text size
         self._text_font_path = None
-        self.text_font = None
+        self._text_font = None
         self._text_leading = 0  # Default text leading (line spacing)
         
         self._curve_detail = 100  # Default curve detail for bezier curves
@@ -977,7 +980,7 @@ class Graphics(pygame.surface.Surface):
         
         try:
             self._text_font = pygame.font.Font(self._text_font_path, self._text_size)
-        except:
+        except Exception as e:
             self._text_font = pygame.font.SysFont(self._text_font_path, self._text_size)
         
     
@@ -2802,6 +2805,8 @@ class Yui:
 
         # Expand to include all children's subtree bounds (converted to our local space)
         for child in self._children:
+            if not child.is_enabled: continue
+            
             cl, ct, cr, cb = child.local_subtree_bounds
             # Convert each corner of the child's subtree bounds to our local space
             corners = [
@@ -3178,7 +3183,7 @@ class Yui:
         Raises:
             RuntimeError: If this Yui element does not use graphics.
         """
-        if self._destroyed:
+        if self._destroyed or not self._enabled or not self._visible:
             return
         
         if self.uses_graphics:
@@ -3190,6 +3195,8 @@ class Yui:
 
             for child in self._children:
                 child.draw(self._graphics)
+            
+            self.post_draw(graphics)
             
             graphics.push_matrix()
             graphics.apply_matrix(self.local_matrix)
@@ -3208,6 +3215,8 @@ class Yui:
 
             for child in self._children:
                 child.draw(graphics)
+            
+            self.post_draw(graphics)
             graphics.pop_matrix()
                 
             self._draw_time_subtree = time.time() - debug_time_start
@@ -3227,7 +3236,7 @@ class Yui:
         """
         indent = ' ' * (self.depth * 2)
         s = ""
-        s += f"{indent}{self.__class__.__name__} (x={self.x}, y={self.y}, r={self.r}, sx={self.sx}, sy={self.sy})"
+        s += f"{indent}{self.__class__.__name__} (x={self.x}, y={self.y}, r={self.r}, sx={self.sx}, sy={self.sy}, width={self.width}, height={self.height})"
         for child in self.children:
             s += "\n" + child.get_tree_string()
         return s
@@ -3281,6 +3290,12 @@ class Yui:
             self.parent._children.remove(self)
         self._parent = None
 
+    @property
+    def is_enabled(self) -> bool:
+        return self._enabled
+    @is_enabled.setter
+    def is_enabled(self, value: bool):
+        self._enabled = value
 
     # --- Callbacks ---
     def on_transform_changed(self, last_x:float, last_y:float, last_r:float, last_sx:float, last_sy:float, last_ax:float, last_ay) -> None:
@@ -3429,6 +3444,15 @@ class Yui:
             graphics (Graphics): The Graphics object to draw on.
         """
         pass
+    def post_draw(self, graphics:Graphics) -> None:
+        """
+        Callback for after this Yui's children elements were drawn.
+        This can be overridden by subclasses to perform custom drawing actions.
+        
+        Args:
+            graphics (Graphics): The Graphics object to draw on.
+        """
+        pass
     def is_interactable(self, point:Vector2D|tuple) -> bool:
         """
         Checks if this Yui element is interactable at the given point.
@@ -3442,7 +3466,13 @@ class Yui:
             bool: True if the element is interactable at the point, False otherwise.
         """
         return True
-    
+    def on_enabled_changed(self):
+        """
+        Callback for when this Yui element's enabled state has changed.
+        This can be overridden by subclasses to perform custom actions.
+        """
+        pass
+
 class YuiRoot(Yui):
     def __init__(self, width:int=800, height:int=600, framerate:int=60, name:str='Yui Window', is_resizable:bool=False):
         # TODO: Implement root-specific initialization logic.
@@ -3455,7 +3485,7 @@ class YuiRoot(Yui):
         self._name = name
         self._framerate = framerate
         self._window = None  # Placeholder for the window object, to be set later
-        self._window_graphics = None  # Placeholder for the window graphics object, to be set later
+        self._window_graphics: Graphics = None  # Placeholder for the window graphics object, to be set later
         self._mouse = Mouse(self)
         self._keyboard = Keyboard(self)
 
@@ -3489,6 +3519,9 @@ class YuiRoot(Yui):
         
         if current is None:
             current = self
+        
+        if current._destroyed or not current._enabled:
+            return None
 
         local = current.to_local(point)
         
@@ -4162,7 +4195,7 @@ class Keyboard():
         Raises:
             TypeError: If the listener is not an instance of KeyboardListener.
         """
-        self._current.on_keyboard_ended(self)
+        if self._current: self._current.on_keyboard_ended(self)
         self._current = None
 
 class KeyboardEvent():
@@ -4379,8 +4412,19 @@ class Switch(Yui, MouseListener):
     
     def __init__(self, parent:Yui, checked:bool=False, radio: 'Switch.Radio'|None = None):
         super().__init__(parent)
-        self.checked = checked
-        self.radio = radio
+        self._checked = checked
+        self._radio = radio
+        radio.add(self)
+    
+    @property
+    def radio(self) -> Switch.Radio:
+        return self._radio
+    @property
+    def checked(self) -> Switch.Radio:
+        return self._checked
+    @checked.setter
+    def checked(self, value: bool):
+        self._checked = value == True
     
     @property
     def is_hovered(self):
@@ -4389,6 +4433,9 @@ class Switch(Yui, MouseListener):
     def is_pressed(self):
         return self.root.mouse.pressed == self
 
+    def on_destroyed(self):
+        self.radio.remove(self)
+    
     def on_draw(self, graphics:Graphics):
         # Draw background
         if self.is_pressed:
@@ -4454,7 +4501,9 @@ class Stack(Yui):
         local_rectangles = []
         anchors = []
         
-        for i, child in enumerate(self._children):
+        enabled = [c for c in self._children if c.is_enabled]
+        
+        for i, child in enumerate(enabled):
             subtree = child.local_subtree_bounds
             points = [
                 child.to_parent(Vector2D(subtree[0], subtree[1])),
@@ -4491,9 +4540,11 @@ class Stack(Yui):
             
         width = max([r[2] - r[0] for r in subtree_rectangles]) if subtree_rectangles else 1
         height = max([r[3] - r[1] for r in subtree_rectangles]) if subtree_rectangles else 1
+        total_width = sum([r[2] - r[0] for r in subtree_rectangles]) if subtree_rectangles else 1
+        total_height = sum([r[3] - r[1] for r in subtree_rectangles]) if subtree_rectangles else 1
         
         coord = 0.0
-        for i, (subtree, local, anchor, child) in enumerate(zip(subtree_rectangles, local_rectangles, anchors, self._children)):
+        for i, (subtree, local, anchor, child) in enumerate(zip(subtree_rectangles, local_rectangles, anchors, enabled)):
             if self._is_vertical:
                 offset_x = (width - (subtree[2] - subtree[0])) * self._stack_align
                 child.x = offset_x + (anchor.x - subtree[0])
@@ -4504,6 +4555,8 @@ class Stack(Yui):
                 child.y = offset_y + (anchor.y - subtree[1])
                 child.x = coord + (anchor.x - subtree[0])
                 coord += subtree[2] - subtree[0] + self._stack_margin
+        
+        self.width, self.height = total_width if not self.is_vertical else width, total_height if self.is_vertical else height
 
 class TextField(Yui, MouseListener, KeyboardListener):
     def __init__(self, parent: Yui, is_editable: bool = True):
@@ -4641,7 +4694,7 @@ class TextField(Yui, MouseListener, KeyboardListener):
 
     def on_keyboard_ended(self, mouse: Mouse):
         self.on_text_finalized(self._last_input_text, False)
-        self._clickthrough.destroy()
+        if self._clickthrough: self._clickthrough.destroy()
 
     def on_keyboard_interupted(self, mouse: Mouse, cause: KeyboardListener):
         self.on_text_finalized(self._last_input_text, interupted=True)
@@ -4783,7 +4836,7 @@ class Slider(Yui, MouseListener):
         graphics.fill_color = Color(200, 200, 200)
         graphics.stroke_color = Color(100, 100, 100)
         graphics.rect_mode = 'corner'
-        graphics.rectangle(left, self.height / 2 - self.height / 4, right, self.height / 2)   
+        graphics.rectangle(left, self.height / 2 - self.height / 4, right - left, self.height / 2)   
         
         # Draw markers
         for i in range(self._steps - 2): # Will not draw when steps is 0, excludes first and last
@@ -4802,3 +4855,112 @@ class Slider(Yui, MouseListener):
             self.normalized_value = (event.point.x - self.height / 2) / (self.width - self.height)
     def on_value_changed(self, old: float):
         pass
+
+class TabView(Stack):
+    class _TabStack(Stack):
+        def __init__(self, parent: Yui):
+            super().__init__(parent, is_vertical=False)
+        def on_draw(self, graphics):
+            for tab in self._children:
+                label = tab.name
+                graphics.text_size = int(self.height)
+                tab.width = graphics.text_width(label) + 5
+                tab.height = graphics.text_size
+            super().on_draw(graphics)
+
+        def can_parent_be_set(self, parent: Yui) -> bool:
+            return isinstance(parent, TabView)
+    
+    class _Tab(Switch):
+        def __init__(self, parent: Yui, container: 'TabView.Container', radio: Switch.Radio):
+            super().__init__(parent, checked=False, radio=radio)
+            self._container = container
+            print(self.radio)
+        @property
+        def name(self) -> str:
+            return self._container.name
+        def on_destroyed(self, parent: Yui, index: int):
+            if not self._container.is_destroyed:
+                TabView._Tab(parent, parent._radio, self._container).set_parent(self.parent, index) # Cannot be destroyed
+            super().on_destroyed()
+        def on_toggle(self, value: bool):
+            self._container.is_enabled = value
+            # Ensure at least one tab is always checked
+            siblings = [c for c in self.parent.children if isinstance(c, TabView._Tab)]
+            if not any(tab.checked for tab in siblings):
+                self.checked = True
+                self._container.is_enabled = True
+            
+        def on_draw(self, graphics: Graphics):
+            # Draw tab background based on checked state
+            if self.checked:
+                graphics.stroke_color = Color(180, 200, 255)
+                graphics.stroke_width = 1
+                graphics.line(0, self.height * 0.95, self.width, self.height * 0.95)
+                graphics.fill_color = Color(180, 200, 255)
+            else:
+                graphics.fill_color = Color(191, 191, 191)
+            graphics.text_align_x, graphics.text_align_y = 0.5, 0.5
+            graphics.text_size = self.height
+            graphics.text(self.name, self.width * 0.5, self.height * 0.5)
+    
+    class Container(Yui):
+        def __init__(self, parent: Yui, tab_name: str):
+            super().__init__(parent)
+            self._tab_name = tab_name
+        @property
+        def name(self) -> str:
+            return self._tab_name
+    
+    def __init__(self, parent: Yui):
+        super().__init__(parent, is_vertical=True)
+        self._radio = Switch.Radio()
+        self._tab_bar = TabView._TabStack(self)
+
+    @property
+    def tab_stack_height(self) -> float:
+        return self._children[0].height
+    @tab_stack_height.setter
+    def tab_stack_height(self, value: float):
+        self._children[0].height = value
+    
+    @property
+    def tab_stack_margin(self) -> float:
+        return self._children[0].stack_margin
+    @tab_stack_margin.setter
+    def tab_stack_margin(self, value: float):
+        self._children[0].stack_margin = value
+    
+    def on_draw(self, graphics):
+        self._tab_bar.width = self.width
+        
+        super().on_draw(graphics)
+    
+    def can_child_be_added(self, child: Yui, index: int) -> bool:
+        if isinstance(child, TabView._TabStack):
+            for c in self:
+                if isinstance(c, TabView._TabStack):
+                    return False
+            return True
+        if isinstance(child, TabView.Container):
+            return True
+        return False
+    
+    def on_child_added(self, child: Yui, index: int):
+        if isinstance(child, TabView._TabStack): return
+        tab = TabView._Tab(self._tab_bar, child, self._radio)
+        tab.set_parent(self._tab_bar, index - 1)
+        if self.child_count == 2:
+            tab.checked = True
+        tab.on_toggle(tab.checked)
+    
+    def on_child_removed(self, child: Yui, index: int):
+        self._tab_bar[index - 1].destroy()
+    
+    def can_child_be_moved(self, child: Yui, old: int, new: int) -> bool:
+        return not isinstance(child, TabView._TabStack)
+    
+    def on_child_moved(self, child: Yui, old: int, new: int) -> bool:
+        self._tab_bar[old - 1].set_parent(self._tab_bar, new - 1)
+
+

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import copy
-import Naming  # for naming NNs or reports, if needed
+import Naming  # for naming NNs or training_reports, if needed
 import MNIST
 from MNIST import Set, Digit
 
@@ -34,30 +34,32 @@ class TestingReport:
         return f"Tested on {self.total} samples, accuracy: {self.accuracy:.2%}"
 
 class Classifier:
-    def __init__(self, layer_sizes=None, prev=None, report=None, model=None):
+    def __init__(self, layer_sizes=None, prev=None, training_report=None, testing_report=None, model=None):
         self.name = Naming.new_name()
         if layer_sizes is None:
             self.name = prev.name.increment() if not prev.trained else prev.name.fork()
             self.layer_sizes = prev.layer_sizes
             self.prev = prev
             self.prev.trained = True
-            self.report = report
+            self.training_report = training_report
+            self.testing_report = testing_report
             self.model = model
         else:
             self.name = Naming.new_name()
             self.layer_sizes = layer_sizes
             self.prev = prev
-            self.report = report
+            self.training_report = training_report
+            self.testing_report = testing_report
             self.model = self._build_network([784, *layer_sizes, 10])
         self.trained = False
         
     def __str__(self):
         lines = [f"🧠 Classifier: {self.name}"]
-        if self.report:
-            lines.append(f"📉 Loss: {getattr(self.report, 'loss', 'N/A'):.6f}")
-            lines.append(f"🎓 Learning rate: {getattr(self.report, 'learning_rate', 'N/A')}")
+        if self.training_report:
+            lines.append(f"📉 Loss: {getattr(self.training_report, 'loss', 'N/A'):.6f}")
+            lines.append(f"🎓 Learning rate: {getattr(self.training_report, 'learning_rate', 'N/A')}")
         else:
-            lines.append("📉 Loss: <no report>")
+            lines.append("📉 Loss: <no training_report>")
         lines.append("🔍 Model parameters:")
         for i, param in enumerate(self.model.parameters()):
             data = param.data
@@ -124,7 +126,7 @@ class Classifier:
         
         return torch.softmax(outputs, dim=1)
     
-    def train(self, dataset: Set, learning_rate: float = 0.01) -> Classifier:
+    def train(self, dataset: Set, testing_dataset: Set = None, learning_rate: float = 0.01) -> Classifier:
         new_model = copy.deepcopy(self.model)
         optimizer = torch.optim.SGD(new_model.parameters(), lr=learning_rate)
         criterion = nn.CrossEntropyLoss()
@@ -133,10 +135,11 @@ class Classifier:
         outputs = new_model(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
+        testing_report = self.test(testing_dataset) if self.testing_report else None
         optimizer.step()
 
         # Create the return Classifier
-        return Classifier(prev=self, report=TrainingReport(dataset, loss.item(), learning_rate), model=new_model)
+        return Classifier(prev=self, training_report=TrainingReport(dataset, loss.item(), learning_rate), testing_report=None, model=new_model)
     
     def test(self, dataset: Set) -> TestingReport:
         with torch.no_grad():

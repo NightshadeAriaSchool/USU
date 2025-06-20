@@ -42,7 +42,6 @@ class Digit:
             for x in range(28):
                 g = graphics.get_at((x, y)).g
                 arr[y, x] = g / 255.0
-        print(arr)
         tensor = torch.from_numpy(arr).view(1, -1)  # Shape (1, 784)
         digit = Digit(tensor)
         digit._graphics = graphics
