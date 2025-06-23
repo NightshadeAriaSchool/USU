@@ -1,6 +1,6 @@
 import pygame
 import threading
-from Yui import Yui, YuiRoot, Graphics, Color, MouseListener, MouseEvent, Stack, Button, TextField, Slider, TabView, Vector2D
+from Yui import Yui, YuiRoot, Graphics, Color, MouseListener, MouseEvent, Stack, Button, TextField, Slider, Switch, TabView, Vector2D
 import MNIST
 from MNIST import Digit, Set
 from Naming import AgentName
@@ -9,6 +9,7 @@ import torch
 import numpy as np
 import re
 import random
+import time
 
 # Kitty hates this T_T
 # TODO:
@@ -29,18 +30,21 @@ class Global:
     user_canvas: Graphics = None
     user_digit: Digit = None
     prediction: list[float] = None
+    predict_on_training: bool = False
     training_batch_size: int = -1
     training_batch_seed: int = 69
     testing_batch_size: int = -1
     testing_batch_seed: int = 69
+    training_thread: threading.Thread = None
+    awaits_prediction = False
           
     @staticmethod      
     def init():
-        Global.training_dataset = MNIST.load(split_train_and_test=False)
-        Global.agents.append(Classifier(layer_sizes=[128, 64]))
+        Global.training_dataset = MNIST.load(split_train_and_test=False, max_size=70000)
+        Global.agents.append(Classifier(layer_sizes=[32, 32]))
         Global.selected_agent = Global.agents[0]
         Global.selected_train_epochs = 1
-        Global.learning_rate = 0.01
+        Global.learning_rate = 0.005
         Global.user_canvas = Graphics(28 * Global.USER_GRAPHICS_SCALE, 28 * Global.USER_GRAPHICS_SCALE)
         Global.user_digit = MNIST.Digit.from_graphics(Global.user_canvas)
         Global.prediction = Global.predict()
@@ -48,22 +52,41 @@ class Global:
         training_size = int(len(Global.training_dataset) * 0.8)
         Global.testing_dataset = Global.training_dataset[training_size:]
         Global.training_dataset = Global.training_dataset[:training_size]
+        Global.awaits_prediction = False
     @staticmethod
     def train(epochs: int):
+        training_dataset = Global.training_dataset
+        testing_dataset = Global.testing_dataset
+        training_batch_size = Global.training_batch_size if Global.training_batch_size > 0 else len(training_dataset)
+        training_batch_seed = random.Random(Global.training_batch_seed).randint(0, 2**32)
+        testing_batch_size = Global.testing_batch_size if Global.testing_batch_size > 0 else len(testing_dataset)
+        testing_batch_seed = random.Random(Global.testing_batch_seed).randint(0, 2**32)
+        selected_agent = Global.selected_agent
+        learning_rate = Global.learning_rate
+        
         for _ in range(epochs):
-            forking = Global.selected_agent.trained
-            data = Global.training_dataset.random(size=Global.training_batch_size, seed=Global.training_batch_seed)
-            test = Global.testing_dataset.random(size=Global.training_batch_size, seed=Global.training_batch_seed) if Global.testing_dataset else None
-            Global.training_batch_seed = random.Random(Global.training_batch_seed).randint(0, 2**32)
-            new_agent = Global.selected_agent.train(data, testing_dataset=test, learning_rate = Global.learning_rate)
+            forking = Global.selected_agent.forked_by is not None or Global.selected_agent.trained
+            selected_agent.trained
+            data = training_dataset.random(size=training_batch_size, seed=training_batch_seed)
+            test = testing_dataset.random(size=testing_batch_size, seed=testing_batch_seed) if testing_dataset else None
+            training_batch_seed = random.Random(Global.training_batch_seed).randint(0, 2**32)
+            testing_batch_seed = random.Random(Global.training_batch_seed).randint(0, 2**32)
+            new_agent = selected_agent.train(data, testing_dataset=test, learning_rate=learning_rate)
             if forking:
                 Global.agents.append(new_agent)
             else:                        
                 idx = Global.agents.index(Global.selected_agent)
                 Global.agents[idx] = new_agent
-            Global.selected_agent = new_agent
+            Global.selected_agent, selected_agent = new_agent, new_agent
+            Global.training_batch_seed, Global.testing_batch_seed = training_batch_seed, testing_batch_seed
+            if Global.predict_on_training or Global.awaits_prediction:
+                Global.predict()
+                Global.awaits_prediction = False
+        Global.training_thread = None
+        Global.predict()
     @staticmethod
     def predict() -> torch.Tensor:
+        print("Predicting...")
         Global.user_digit = MNIST.Digit.from_graphics(Global.user_canvas)
         # If digit is not a torch.Tensor, convert here
         if not isinstance(Global.user_digit.tensor, torch.Tensor):
@@ -82,6 +105,15 @@ class Main(YuiRoot):
         self.auto_background = Color(0, 0, 0, 255)
         # self.auto_draw_bounds = True
         LoadingScreen(parent=self)
+    
+    def on_draw(self, graphics):
+        super().on_draw(graphics)
+        graphics.fill_color = Color(255, 255, 255, 255)
+        graphics.text_size = 20
+        graphics.text_align_x, graphics.text_align_y = 0, 1
+        
+        # graphics.text(f"Keyboard: {self.root.keyboard.listener}", 0, self.root.height - 20)
+        # graphics.text(f"Mouse: {self.root.mouse.pressed}", 0, self.root.height)
         
     def on_child_destroyed(self, child: Yui, index: int):
         if isinstance(child, LoadingScreen):
@@ -176,7 +208,10 @@ class ActualProgram(Stack):
                     Global.user_canvas.ellipse(lerp.x, lerp.y, Global.USER_GRAPHICS_SCALE * 3, Global.USER_GRAPHICS_SCALE * 3)
                 
                 if event.is_released_event:
-                    Global.predict()
+                    if Global.training_thread is None:
+                        Global.predict()
+                    else:
+                        Global.awaits_prediction = True
 
         class PredictionYui(Stack):
             def __init__(self, parent):
@@ -245,14 +280,23 @@ class ActualProgram(Stack):
                 graphics.text_align_x = 1
                 graphics.text_align_y = 0
                 
-                graphics.text_size = int(self.height / 2)
+                graphics.text_size = int(self.height * 2 / 7)
                 graphics.text(f"{Global.selected_agent.name.persona_name}", self.width, 0)
-                graphics.text_size = int(self.height / 6)
-                graphics.text(f"Epoch: {Global.selected_agent.name.epoch}", self.width, self.height * 3 / 6)
+                graphics.text_size = int(self.height / 7)
+                graphics.text(f"Epoch: {Global.selected_agent.name.epoch}", self.width, self.height * 2 / 7)
+                
+                y = 3 / 7
+                if Global.selected_agent.training_report:
+                    graphics.text(f"Loss: {Global.selected_agent.training_report.loss:.4f}", self.width, self.height * y)
+                    y += 1 / 7
+                if Global.selected_agent.testing_report:
+                    graphics.text(f"Accuracy: {(Global.selected_agent.testing_report.accuracy * 100):.2f} %", self.width, self.height * y)
+                    y += 1 / 7
                 forked_by = Global.selected_agent.forked_by
                 if forked_by:
-                    graphics.text(f"Forked by: {forked_by.name.persona_name}", self.width, self.height * 4 / 6)
-                    graphics.text(f"Forked at: {forked_by.name.epoch}", self.width, self.height * 5 / 6)
+                    graphics.text(f"Forked by: {forked_by.name.persona_name}", self.width, self.height * y)
+                    graphics.text(f"Forked at: {forked_by.name.epoch}", self.width, self.height * (y + 1 / 7))
+                    y += 2 / 7
 
         class AgentTreeView(Yui, MouseListener):
             def __init__(self, parent):
@@ -353,6 +397,141 @@ class ActualProgram(Stack):
                     Global.selected_agent = agent.get_epoch(int(selected_epoch))
                     Global.predict()
 
+        class AgentLossView(TabView.Container):
+            def __init__(self, parent):
+                super().__init__(parent, "Loss")
+                self.uses_graphics = True
+            
+            def on_draw(self, graphics: Graphics):
+                graphics.background(Color(0, 0, 0, 255))
+                
+                id = Global.selected_agent.name.id
+                agent_id = id
+                matching_agents = [agent for agent in Global.agents if agent.name.id == agent_id]
+                if matching_agents:
+                    agent = matching_agents[0]
+                
+                losses = []
+                history = []
+                # Traverse the chain of Classifiers using .prev to gather history and losses
+                agent_iter = agent
+                while agent_iter is not None:
+                    if hasattr(agent_iter, "training_report") and agent_iter.training_report is not None:
+                        history.append(agent_iter)
+                        losses.append(agent_iter.training_report.loss)
+                    agent_iter = getattr(agent_iter, "prev", None)
+                history.reverse()
+                losses.reverse()
+                
+                if not losses:
+                    return
+
+                # Draw axes
+                padding = 40
+                w = self.width - 2 * padding
+                h = self.height - 2 * padding
+
+                graphics.stroke_color = Color(200, 200, 200, 255)
+                graphics.stroke_width = 1
+                graphics.line(padding, self.height - padding, padding + w, self.height - padding)  # X axis
+                graphics.line(padding, self.height - padding, padding, self.height - padding - h)  # Y axis
+
+                # Draw loss curve
+                if len(losses) > 1:
+                    min_loss = min(losses)
+                    max_loss = max(losses)
+                    loss_range = max_loss - min_loss if max_loss != min_loss else 1
+
+                    points = []
+                    for i, loss in enumerate(losses):
+                        x = padding + w * i / (len(losses) - 1)
+                        y = self.height - padding - h * (loss - min_loss) / loss_range
+                        points.append((x, y))
+
+                    graphics.stroke_color = Color(255, 127, 63, 255)
+                    graphics.stroke_width = 1
+                    step = min(max(1, int(np.ceil((len(points) - 1) / w / 4))), w / 4)
+                    for i in range(0, len(points) - 1, step):
+                        graphics.line(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1])
+
+                    # Draw min/max labels
+                    graphics.fill_color = Color(255, 255, 255, 255)
+                    graphics.text_size = 14
+                    graphics.text_align_x = 1
+                    graphics.text_align_y = 1
+                    graphics.text(f"{max_loss:.4f}", padding - 5, self.height - padding - h)
+                    graphics.text(f"{min_loss:.4f}", padding - 5, self.height - padding)
+
+                    # Draw epoch labels
+                    graphics.text_align_x = 1
+                    graphics.text_align_y = 0
+                    graphics.text(f"Epoch {history[0].name.epoch}", padding, self.height - padding + 5)
+                    graphics.text(f"Epoch {history[-1].name.epoch}", padding + w, self.height - padding + 5)
+        
+        class AgentAccuracyView(TabView.Container):
+            def __init__(self, parent):
+                super().__init__(parent, "Accuracy")
+                self.uses_graphics = True
+            
+            def on_draw(self, graphics: Graphics):
+                graphics.background(Color(0, 0, 0, 255))
+                
+                id = Global.selected_agent.name.id
+                agent_id = id
+                matching_agents = [agent for agent in Global.agents if agent.name.id == agent_id]
+                if matching_agents:
+                    agent = matching_agents[0]
+                
+                accuracy = []
+                history = []
+                # Traverse the chain of Classifiers using .prev to gather history and accuracy
+                agent_iter = agent
+                while agent_iter is not None:
+                    if hasattr(agent_iter, "training_report") and agent_iter.testing_report is not None:
+                        history.append(agent_iter)
+                        accuracy.append(agent_iter.testing_report.accuracy)
+                    agent_iter = getattr(agent_iter, "prev", None)
+                history.reverse()
+                accuracy.reverse()
+
+                # Draw axes
+                padding = 40
+                w = self.width - 2 * padding
+                h = self.height - 2 * padding
+
+                graphics.stroke_color = Color(200, 200, 200, 255)
+                graphics.stroke_width = 1
+                graphics.line(padding, self.height - padding, padding + w, self.height - padding)  # X axis
+                graphics.line(padding, self.height - padding, padding, self.height - padding - h)  # Y axis
+                
+                # Draw loss curve
+                if len(accuracy) > 1:
+                    points = []
+                    for i, loss in enumerate(accuracy):
+                        x = padding + w * i / (len(accuracy) - 1)
+                        y = self.height - padding - h * loss / 1
+                        points.append((x, y))
+
+                    graphics.stroke_color = Color(255, 127, 63, 255)
+                    graphics.stroke_width = 1
+                    step = min(max(1, int(np.ceil((len(points) - 1) / w / 4))), w / 4)
+                    for i in range(0, len(points) - 1, step):
+                        graphics.line(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1])
+
+                    # Draw min/max labels
+                    graphics.fill_color = Color(255, 255, 255, 255)
+                    graphics.text_size = 14
+                    graphics.text_align_x = 1
+                    graphics.text_align_y = 1
+                    graphics.text(f"100 %", padding - 5, self.height - padding - h)
+                    graphics.text(f"0 %", padding - 5, self.height - padding)
+
+                    # Draw epoch labels
+                    graphics.text_align_x = 1
+                    graphics.text_align_y = 0
+                    graphics.text(f"Epoch {history[0].name.epoch}", padding, self.height - padding + 5)
+                    graphics.text(f"Epoch {history[-1].name.epoch}", padding + w, self.height - padding + 5)
+        
         class EpochValue(Yui):
             def __init__(self, parent):                        
                 super().__init__(parent=parent)                        
@@ -434,14 +613,34 @@ class ActualProgram(Stack):
                 
                 batch_slider = Slider(training_batch_size_stack)
                 batch_slider.width, batch_slider.height = width / 2 - height / 24, height / 24
-                batch_slider.minimum, batch_slider.maximum = 0, len(Global.training_dataset)
-                batch_slider.steps = int((len(Global.training_dataset) / 5000 if len(Global.training_dataset) / 2000 > 20 else len(Global.training_dataset) / 2000) if len(Global.training_dataset) / 200 > 20 else len(Global.training_dataset) / 200) + 1
+                batch_slider.minimum = 0
+                if len(Global.training_dataset) / 200 < 20:
+                    batch_slider.maximum = int(np.ceil(len(Global.training_dataset) / 200)) * 200
+                    batch_slider.steps = int(np.ceil(len(Global.training_dataset) / 200)) + 1
+                elif len(Global.training_dataset) / 2000 < 20:
+                    batch_slider.maximum = int(np.ceil(len(Global.training_dataset) / 2000)) * 2000
+                    batch_slider.steps = int(np.ceil(len(Global.training_dataset) / 2000)) + 1
+                else:
+                    batch_slider.maximum = int(np.ceil(len(Global.training_dataset) / 5000)) * 5000
+                    batch_slider.steps = int(np.ceil(len(Global.training_dataset) / 5000)) + 1
                 def batch_slider_on_value_changed(self: Slider, old: float):
-                    text_field: TextField = self.parent.children[2]
-                    amount = int(max(2, min(len(Global.training_dataset), self.normalized_value * self.maximum)))
+                    text_field: TextField = self.parent.children[3]
+                    amount = int(max(2, min(len(Global.training_dataset), self.value)))
                     text_field.default_text = f"{amount}"
-                    Global.testing_batch_size = amount
+                    Global.training_batch_size = amount
                 batch_slider.on_value_changed = batch_slider_on_value_changed.__get__(batch_slider, Slider)
+                
+                batch_slider_tiny = Slider(training_batch_size_stack)
+                batch_slider_tiny.width, batch_slider_tiny.height = width / 2 - height / 24, height / 24
+                batch_slider_tiny.minimum = 64
+                batch_slider_tiny.maximum = 1024
+                batch_slider_tiny.steps = 16
+                def batch_slider_tiny_on_value_changed(self: Slider, old: float):
+                    text_field: TextField = self.parent.children[3]
+                    amount = int(max(2, min(len(Global.training_dataset), self.value)))
+                    text_field.default_text = f"{amount}"
+                    Global.training_batch_size = amount
+                batch_slider_tiny.on_value_changed = batch_slider_tiny_on_value_changed.__get__(batch_slider_tiny, Slider)
                 
                 batch_count = TextField(training_batch_size_stack, is_editable=False)
                 batch_count.width, batch_count.height = width / 4, height / 18
@@ -481,13 +680,39 @@ class ActualProgram(Stack):
                 seed_count.on_draw = seed_on_draw.__get__(seed_count, TextField)
                 seed_count.on_text_changed = seed_on_text_changed.__get__(seed_count, TextField)
                 seed_count.on_text_finalized = seed_on_text_finalized.__get__(seed_count, TextField)
-
-                train_stack = Stack(root, is_vertical=False)
-                train_stack.width, train_stack.height = width - height / 24, height / 12
-                train_stack.stack_margin = 10
-
                 
+                class TinySizes(Switch):
+                    def __init__(self, parent, training_batch_size_stack):
+                        super().__init__(parent)
+                        self.training_batch_size_stack = training_batch_size_stack
+                        self.width, self.height = 80, batch_slider.height
+                        self.checked = False
+                        self.on_toggle(0)
 
+                    def on_toggle(self, old):
+                        batch_slider = self.training_batch_size_stack.children[1]
+                        tiny_batch_slider = self.training_batch_size_stack.children[2]
+                        tiny_batch_slider.is_enabled = self.checked
+                        batch_slider.is_enabled = not self.checked
+                        if tiny_batch_slider.is_enabled:
+                            tiny_batch_slider.on_value_changed(0)
+                        else:
+                            batch_slider.on_value_changed(0)
+                
+                horizontal_stack = Stack(root, is_vertical=False)
+                horizontal_stack.stack_margin = 10
+                horizontal_stack.stack_align = 0.5
+                
+                label = TextField(horizontal_stack, is_editable=False)
+                label.width, label.height = self.width * 7 / 8 - self.height / 48, self.height / 18
+                label.text_color = Color(255, 255, 255, 255)
+                label.default_text = "Tiny sizes"
+
+                switch = TinySizes(horizontal_stack, training_batch_size_stack=training_batch_size_stack)
+                switch.value = True
+                switch.width, switch.height = self.width / 8 - self.height / 48, self.height / 24
+                switch.on_toggle(0)
+                
                 self.tab_stack_margin = 10
         
         class TestTab(TabView.Container):
@@ -512,8 +737,16 @@ class ActualProgram(Stack):
                 
                 batch_slider = Slider(testing_batch_size_stack)
                 batch_slider.width, batch_slider.height = width / 2 - height / 24, height / 24
-                batch_slider.minimum, batch_slider.maximum = 0, len(Global.testing_dataset)
-                batch_slider.steps = int((len(Global.testing_dataset) / 5000 if len(Global.testing_dataset) / 2000 > 20 else len(Global.testing_dataset) / 2000) if len(Global.testing_dataset) / 200 > 20 else len(Global.testing_dataset) / 200) + 1
+                batch_slider.minimum = 0
+                if len(Global.testing_dataset) / 200 < 20:
+                    batch_slider.maximum = int(np.ceil(len(Global.testing_dataset) / 200)) * 200
+                    batch_slider.steps = int(np.ceil(len(Global.testing_dataset) / 200)) + 1
+                elif len(Global.testing_dataset) / 2000 < 20:
+                    batch_slider.maximum = int(np.ceil(len(Global.testing_dataset) / 2000)) * 2000
+                    batch_slider.steps = int(np.ceil(len(Global.testing_dataset) / 2000)) + 1
+                else:
+                    batch_slider.maximum = int(np.ceil(len(Global.testing_dataset) / 5000)) * 5000
+                    batch_slider.steps = int(np.ceil(len(Global.testing_dataset) / 5000)) + 1
                 def batch_slider_on_value_changed(self: Slider, old: float):
                     text_field: TextField = self.parent.children[2]
                     amount = int(max(2, min(len(Global.testing_dataset), self.value)))
@@ -564,6 +797,33 @@ class ActualProgram(Stack):
 
                 self.tab_stack_margin = 10
         
+        class PredictTab(TabView.Container):
+            def __init__(self, parent):
+                super().__init__(parent, "Predict")
+                self.width, self.height = self.root.width / 2 - 5, self.root.height * 0.75
+                
+                root = Stack(self, is_vertical=True)
+                root.width, root.height = self.width, self.height
+                root.stack_margin = 10
+
+                horizontal_stack = Stack(root, is_vertical=False)
+                horizontal_stack.stack_margin = 10
+                horizontal_stack.stack_align = 0.5
+                
+                label = TextField(horizontal_stack, is_editable=False)
+                label.width, label.height = self.width * 7 / 8 - self.height / 48, self.height / 18
+                label.text_color = Color(255, 255, 255, 255)
+                label.default_text = "Update prediction on training"
+
+                switch = Switch(horizontal_stack)
+                switch.value = True
+                switch.width, switch.height = self.width / 8 - self.height / 48, self.height / 24
+                def switch_on_toggle(self: Switch, old: bool):
+                    Global.predict_on_training = self.value
+                switch.on_toggle = switch_on_toggle.__get__(switch, Switch)
+                
+                self.tab_stack_margin = 10
+        
         left = Stack(self, is_vertical=True)
         left.stack_align = 0.5
         left.stack_margin = 10
@@ -580,7 +840,11 @@ class ActualProgram(Stack):
             Button.on_draw(self, graphics)
         def clear_canvas_on_click(self):  
             Global.user_canvas = Graphics(28 * Global.USER_GRAPHICS_SCALE, 28 * Global.USER_GRAPHICS_SCALE)
-            Global.predict()
+            
+            if Global.training_thread is None:
+                Global.predict()
+            else:
+                Global.awaits_prediction = True
         clear_canvas_button.on_draw = clear_canvas_on_draw.__get__(clear_canvas_button, Button)
         clear_canvas_button.on_click = clear_canvas_on_click.__get__(clear_canvas_button, Button)
         
@@ -592,25 +856,41 @@ class ActualProgram(Stack):
         right.stack_margin = 10
         
         info_yui = InfoYui(right)
-        info_yui.width, info_yui.height = self.width / 2 - self.stack_margin / 2, self.height / 6
+        info_yui.width, info_yui.height = self.width / 2 - self.stack_margin / 2, self.height / 5
         
-        tree_view = AgentTreeView(right)
-        tree_view.width, tree_view.height = self.width / 2 - self.stack_margin / 2, self.height / 6
+        # tree_view = AgentTreeView(right)
+        # tree_view.width, tree_view.height = self.width / 2 - self.stack_margin / 2, self.height / 6
         
-        tab_view = TabView(right)
-        tab_view.width, tab_view.height = self.width / 2 - self.stack_margin / 2, self.height / 2
-        tab_view.tab_stack_height = 25
+        # --- Upper Tabs ---
+        upper_tab_view = TabView(right)
+        upper_tab_view.width, upper_tab_view.height = self.width / 2 - self.stack_margin / 2, self.height / 3
+        upper_tab_view.tab_stack_height = 25
         
-        train_tab = TrainTab(tab_view)
+        loss_graph = AgentLossView(upper_tab_view)
+        loss_graph.width, loss_graph.height = self.width / 2 - self.stack_margin / 2, self.height / 4
+        
+        accuracy_graph = AgentAccuracyView(upper_tab_view)
+        accuracy_graph.width, accuracy_graph.height = self.width / 2 - self.stack_margin / 2, self.height / 4
+        
+        # --- Lower Tabs ---
+        lower_tab_view = TabView(right)
+        lower_tab_view.width, lower_tab_view.height = self.width / 2 - self.stack_margin / 2, self.height / 2
+        lower_tab_view.tab_stack_height = 25
+        
+        train_tab = TrainTab(lower_tab_view)
         train_tab.width, train_tab.height = self.width / 2 - self.stack_margin / 2, self.height / 12
         
-        test_tab = TestTab(tab_view)
+        test_tab = TestTab(lower_tab_view)
         test_tab.width, test_tab.height = self.width / 2 - self.stack_margin / 2, self.height / 12
+        
+        predict_tab = PredictTab(lower_tab_view)
+        predict_tab.width, predict_tab.height = self.width / 2 - self.stack_margin / 2, self.height / 12
 
         test_stack = Stack(right, is_vertical=False)
         test_stack.width, test_stack.height = self.width / 2 - self.height / 24, self.height / 12
         test_stack.stack_margin = 10
         
+        # --- Train ---
         epoch_value = EpochValue(test_stack)  
         epoch_value.width, epoch_value.height = self.width / 4 - 5 - self.height / 24, self.height / 12
         
@@ -618,10 +898,30 @@ class ActualProgram(Stack):
         train_button.width, train_button.height = self.width / 4 - 5, self.height / 12
         def train_button_on_draw(self: Button, graphics: Graphics):
             self.label = f"Train {Global.selected_train_epochs} epoch{'' if Global.selected_train_epochs == 1 else 's'}"
+            thread = Global.training_thread
+            if thread is not None:
+                self.label = "Training"
+                for i in range(int(time.time() % 3) + 1): self.label += "."
+                self.label += f" ({thread.current_step} / {thread.steps})"
             Button.on_draw(self, graphics)
         def train_button_on_click(self: Button):
-            Global.train(Global.selected_train_epochs)
-            Global.predict()
+            class TrainingThread(threading.Thread):
+                def __init__(self):
+                    super().__init__()
+                    self.start_epoch = Global.selected_agent.name.epoch
+                    self.end_epoch = self.start_epoch + Global.selected_train_epochs
+                @property
+                def steps(self):
+                    return self.end_epoch - self.start_epoch
+                @property
+                def current_step(self):
+                    return Global.selected_agent.name.epoch - self.start_epoch
+                def run(self):
+                    Global.train(Global.selected_train_epochs)
+            if Global.training_thread is not None:
+                return
+            Global.training_thread = TrainingThread()
+            Global.training_thread.start()
         train_button.on_draw = train_button_on_draw.__get__(train_button, Button)
         train_button.on_click = train_button_on_click.__get__(train_button, Button)
         

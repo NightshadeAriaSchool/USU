@@ -22,9 +22,9 @@ class TrainingReport:
 class TestingReport:
     def __init__(self, dataset: Set, outputs: torch.Tensor):
         self.dataset = dataset
-        self.expected_labels = torch.tensor([d.label for d in dataset])
+        self.expected_labels = torch.stack([torch.tensor(d.label) for d in dataset])
         self.predicted_labels = outputs
-        self.expected_digits = torch.tensor([d.digit for d in dataset])
+        self.expected_digits = torch.stack([torch.tensor(d.digit) for d in dataset])
         self.predicted_digits = torch.argmax(outputs, dim=1)
         self.correct = (self.predicted_digits == self.expected_digits).sum().item()
         self.total = len(dataset)
@@ -135,13 +135,14 @@ class Classifier:
         outputs = new_model(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
-        testing_report = self.test(testing_dataset) if self.testing_report else None
+        testing_report = self.test(testing_dataset) if testing_dataset is not None else None
         optimizer.step()
 
         # Create the return Classifier
-        return Classifier(prev=self, training_report=TrainingReport(dataset, loss.item(), learning_rate), testing_report=None, model=new_model)
+        return Classifier(prev=self, training_report=TrainingReport(dataset, loss.item(), learning_rate), testing_report=testing_report, model=new_model)
     
     def test(self, dataset: Set) -> TestingReport:
         with torch.no_grad():
-            outputs = self.model(dataset.to_torch_format())
-        return TestingReport(dataset, outputs)
+            inputs, _ = dataset.to_torch_format()
+            outputs = self.model(inputs)
+            return TestingReport(dataset, outputs)

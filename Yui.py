@@ -3801,13 +3801,15 @@ class Mouse:
         else:
             self._pressed.on_mouse_event(yui_event.to_local(self._pressed))
     
-    def pass_event(self, event: MouseEvent, yui: MouseListener = None):
-        if not self._pressed:
+    def pass_event(self, yui: MouseListener = None):
+        if self._current is None:
             return
-        yui = self._root.yui_at_point(self._pressed.to_world(event.point), extends=MouseListener, exclude=[self])
-        if not yui:
+        self._pressed = None
+        if yui is None:
+            yui: MouseListener = self._root.yui_at_point(self._current.point, extends=MouseListener, exclude=[self])
+        if yui is None:
             return
-        yui.on_mouse_event(event.to_world(yui).pass_to(yui))
+        yui.on_mouse_event(self._current.to_local(yui).pass_to(yui))
         self._pressed = yui
         
 class MouseEvent:
@@ -4195,7 +4197,8 @@ class Keyboard():
         Raises:
             TypeError: If the listener is not an instance of KeyboardListener.
         """
-        if self._current: self._current.on_keyboard_ended(self)
+        if self._current is not None:
+            self._current.on_keyboard_ended(self)
         self._current = None
 
 class KeyboardEvent():
@@ -4414,7 +4417,7 @@ class Switch(Yui, MouseListener):
         super().__init__(parent)
         self._checked = checked
         self._radio = radio
-        radio.add(self)
+        if radio is not None: radio.add(self)
     
     @property
     def radio(self) -> Switch.Radio:
@@ -4686,15 +4689,17 @@ class TextField(Yui, MouseListener, KeyboardListener):
                 if event.is_pressed_event:
                     text_field_event = event.to_world(self).to_local(self.text_field)
                     if self.text_field.is_in_local_bounds(text_field_event.point):
-                        event.mouse.pass_event(event, yui=self.text_field)
+                        event.mouse.pass_event(yui=self.text_field)
                     else:
                         event.mouse.root.keyboard.end_keyboard()
-                        event.mouse.pass_event(event)
+                        event.mouse.pass_event()
+                        
         return _ClickThrough(self)
 
-    def on_keyboard_ended(self, mouse: Mouse):
+    def on_keyboard_ended(self, keyboard: Keyboard):
         self.on_text_finalized(self._last_input_text, False)
-        if self._clickthrough: self._clickthrough.destroy()
+        if self._clickthrough is not None:
+            self._clickthrough.destroy()
 
     def on_keyboard_interupted(self, mouse: Mouse, cause: KeyboardListener):
         self.on_text_finalized(self._last_input_text, interupted=True)
